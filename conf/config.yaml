@@ -21,6 +21,13 @@ data:
   cycle_length: 32 # samples per unit frequency
   series_length: 2048
   series_per_category: 8
+  # Held-out validation set: extra series at half-step phase offsets (so they never
+  # coincide with the training phases), from which a fixed, large pool of windows is
+  # sampled once with a constant seed -> identical val set across every setup/seed.
+  # Per-category nMSE is reported on THIS set, not the 8-window training minibatch,
+  # which removes the per-step estimation noise.
+  val_series_per_category: 4
+  val_windows_per_category: 512
   context_length: 64
   horizon: 16
   # Control: collapse all categories to scale 1.0 (disparity must vanish).
@@ -38,6 +45,8 @@ model:
 train:
   steps: 30000
   batch_size: 24 # must be divisible by number of categories
+  optimizer: sgd # sgd exposes the raw b^2=sigma^2 gradient weighting; adam's
+  # per-coordinate RMS normalization divides out the global magnitude inflation
   lr: 1.0e-3
   eval_every: 100 # cadence for scalar metric curves (nMSE, grad mag)
   # Control: rescale the full gradient to unit global norm each step, removing
@@ -50,6 +59,9 @@ train:
     - {until: 1000, every: 200}
     - {until: 10000, every: 1000}
     - {until: 1000000, every: 10000}
+  # Columns shown in the static forecast-evolution figure (also force-captured as
+  # snapshots). Values past the final step map to the final snapshot.
+  forecast_columns: [0, 100, 200, 500, 1000, 30000]
 
 plot:
   band: std # shaded band around the across-seed mean: std | se

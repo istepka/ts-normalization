@@ -25,6 +25,13 @@ for jid in $others; do
   fi
 done
 
-# Any extra args are passed through as Hydra overrides, e.g.:
-#   sbatch scripts/run.sbatch train.steps=8000 train.lr=3e-4
-uv run python main.py device=cuda "$@"
+# Job-ID-prefixed output dir so concurrent variants never collide; the paper dir
+# (`${RUN_DIR}_paper`) inherits the same prefix automatically.
+RUN_DIR="outputs/${SLURM_JOB_ID}_loss_space_toy"
+
+# Any extra args are passed through as Hydra overrides, e.g. a longer variant:
+#   sbatch --job-name=loss_space_100k scripts/run.sbatch train.steps=100000
+# (give a distinct --job-name when running variants concurrently, so the guard
+# above does not treat them as duplicates of each other).
+uv run python main.py device=cuda output_dir="$RUN_DIR" "$@"
+echo "outputs: $RUN_DIR  (paper: ${RUN_DIR}_paper)"

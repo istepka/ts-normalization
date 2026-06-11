@@ -13,6 +13,8 @@ import numpy as np
 import torch
 from omegaconf import DictConfig
 
+VAL_SEED = 12345  # fixed -> the held-out validation set is identical across all runs
+
 
 @dataclass
 class Batch:
@@ -36,16 +38,24 @@ class SyntheticTSDataset:
         self.category_names = [c.name for c in cfg.data.categories]
         self.num_categories = len(cfg.data.categories)
 
-        windows_per_category = self._build_windows(cfg)
-        self.windows = windows_per_category  # list of [n_windows, window_length]
+        self.windows = self._build_windows(cfg, train=True)  # [n_windows, win_len] each
         self.batch_schedule = self._build_schedule(cfg, generator)
+        self._build_val_set(cfg)
 
-    def _build_windows(self, cfg: DictConfig) -> list[torch.Tensor]:
+    def _build_windows(self, cfg: DictConfig, *, train: bool) -> list[torch.Tensor]:
+        """Per-category sliding windows. Training series sit at phases
+        `s * 2pi / series_per_category`; validation series add a half-step offset
+        (`pi / series_per_category`) so their phases never coincide with training,
+        giving a genuinely held-out (unseen-phase) evaluation set."""
         mean = cfg.data.mean
         cycle_length = cfg.data.cycle_length
         series_length = cfg.data.series_length
-        series_per_category = cfg.data.series_per_category
+        spacing = 2.0 * np.pi / cfg.data.series_per_category
         equal_variance = cfg.data.equal_variance
+        n_series = (
+            cfg.data.series_per_category if train else cfg.data.val_series_per_category
+        )
+        offset = 0.0 if train else 0.5 * spacing
 
         t = np.arange(series_length, dtype=np.float64)
         windows_per_category = []
@@ -53,15 +63,31 @@ class SyntheticTSDataset:
             scale = 1.0 if equal_variance else category.scale
             omega = 2.0 * np.pi * category.freq / cycle_length
             series_windows = []
-            for s in range(series_per_category):
-                # Per-series phase offset keeps windows from being identical while
-                # preserving the category's frequency and amplitude scale.
-                phase = category.phase + s * (2.0 * np.pi / series_per_category)
+            for s in range(n_series):
+                phase = category.phase + offset + s * spacing
                 signal = mean + scale * np.sin(omega * t + phase)
                 series_windows.append(self._sliding_windows(signal))
             windows = np.concatenate(series_windows, axis=0)
             windows_per_category.append(torch.from_numpy(windows).float())
         return windows_per_category
+
+    def _build_val_set(self, cfg: DictConfig):
+        """Sample a fixed, large pool of held-out windows per category (constant seed,
+        so every setup/seed evaluates on the identical set). Stored as flat tensors
+        `val_context / val_target / val_category` for a single forward pass per eval."""
+        val_windows = self._build_windows(cfg, train=False)
+        n = cfg.data.val_windows_per_category
+        gen = torch.Generator().manual_seed(VAL_SEED)
+        contexts, targets, categories = [], [], []
+        for c, windows in enumerate(val_windows):
+            pick = torch.randint(len(windows), (n,), generator=gen)
+            chosen = windows[pick]
+            contexts.append(chosen[:, : self.context_length])
+            targets.append(chosen[:, self.context_length :])
+            categories.append(torch.full((n,), c, dtype=torch.long))
+        self.val_context = torch.cat(contexts, dim=0)
+        self.val_target = torch.cat(targets, dim=0)
+        self.val_category = torch.cat(categories, dim=0)
 
     def _sliding_windows(self, signal: np.ndarray) -> np.ndarray:
         n = len(signal) - self.window_length + 1

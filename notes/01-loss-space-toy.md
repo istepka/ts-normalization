@@ -12,8 +12,11 @@ low-σ categories lag. Normalized-space loss removes this.
   **1 : 10 : 100** (`var1`, `var10`, `var100`). Variance is purely amplitude-driven.
 - Model: tiny univariate patch transformer with RevIN-style instance norm
   (`a = mean`, `b = std` of the context); predicts the horizon in normalized space.
-- Optimizer: **SGD** on purpose — Adam is per-coordinate scale-invariant and would erase
-  the σ² effect we are trying to expose.
+- Optimizer: **SGD** on purpose — it steps along the raw σ²-weighted gradient, so the
+  bias is visible directly. Adam's per-coordinate RMS normalization divides out the
+  *global* magnitude inflation (the same thing the `grad_norm_match` control isolates),
+  so it is expected to *reduce* — not necessarily erase — the disparity. Switchable via
+  `train.optimizer: {sgd, adam}`; the Adam variant is tracked below.
 - Identical seed / weight init / stratified batch schedule across all runs; the **only**
   difference is the loss space (and the control toggles).
 - Metric: per-category **nMSE in normalized space** (common metric for both runs), plus
@@ -47,8 +50,8 @@ low-σ categories lag. Normalized-space loss removes this.
 
 ## Results (lr=1e-3, 30k steps, GPU/Slurm, SGD)
 
-5-seed GPU run (job 12507, mean over seeds; figures show mean ± 1 SD). Figures in
-`outputs/loss_space_toy/`, metrics in `summary.json`, live curves in W&B
+5-seed GPU run (job 12521, mean over seeds; figures show mean ± 1 SD). Figures in
+`outputs/12521_loss_space_toy/`, metrics in `summary.json`, live curves in W&B
 (`ts-normalization/loss_space_comparison`, group `var_1_10_100/*`). All five checks pass.
 
 **nMSE spread (max/min across categories) and global nMSE:**
@@ -81,6 +84,13 @@ to reach 8e-4. The `nmse_core` curves now trend down throughout with no flat tai
 > high-variance category. That divergence is itself a manifestation of the bias; the
 > 1:10:100 spread (amplitudes 1:3.16:10) stays stable while keeping the graded pace clear.
 
+## 100k-step variant (job 12523)
+
+Longer-budget rerun (`train.steps=100000`, experiment tag `var_1_10_100_100k`, figures in
+`outputs/12523_loss_space_toy/`) to test whether the disparity is purely a fixed-budget
+artifact — i.e. whether `var1` keeps descending or the original-space gap stays open. _Run
+in progress; numbers filled on completion._
+
 ## Figures
 
 **Core comparison — `nmse_core.png`.** Left: normalized-space loss keeps all categories
@@ -88,48 +98,49 @@ in a tight bundle (equal pace). Right: original-space loss fans out, σ-ordered 
 `var100` plunges ~2–3 orders of magnitude below `var1`. All curves trend down through
 30k steps (no flat tail); the difference is the *rate*. Shaded bands are ±1 SD over seeds.
 
-![nmse core](../outputs/loss_space_toy/nmse_core.png)
+![nmse core](../outputs/12521_loss_space_toy/nmse_core.png)
 
 **Controls — `nmse_controls.png`.** Left (equal variance): the fan-out collapses back to
 the normalized baseline → the disparity was *variance*, not the frequency confound.
 Right (grad-norm matched): the staggered fan-out persists even with global step size
 equalized → loss-space bias, not a learning-rate artifact.
 
-![nmse controls](../outputs/loss_space_toy/nmse_controls.png)
+![nmse controls](../outputs/12521_loss_space_toy/nmse_controls.png)
 
 **Global convergence — `nmse_global.png`.** Global nMSE (averaged over all categories)
 per setup, mean ± 1 SD over seeds — shows each setup converging overall while the
 per-category fan-out (above) is what differs.
 
-![nmse global](../outputs/loss_space_toy/nmse_global.png)
+![nmse global](../outputs/12521_loss_space_toy/nmse_global.png)
 
 **Gradient scaling — `grad_magnitude.png`.** Per-category gradient magnitude at init:
 normalized bars are flat, original bars climb as σ² (≈ 1 : 10 : 100), the direct
 signature of the `b²=σ²` factor.
 
-![grad magnitude](../outputs/loss_space_toy/grad_magnitude.png)
+![grad magnitude](../outputs/12521_loss_space_toy/grad_magnitude.png)
 
 **Qualitative forecasts — `forecasts_original.png`.** The original-space-trained model
 fits `var10`/`var100` near-perfectly while under-serving `var1`, which barely received
 gradient signal.
 
-![forecasts original](../outputs/loss_space_toy/forecasts_original.png)
+![forecasts original](../outputs/12521_loss_space_toy/forecasts_original.png)
 
 For contrast, the normalized-space-trained model serves all three categories evenly:
 
-![forecasts normalized](../outputs/loss_space_toy/forecasts_normalized.png)
+![forecasts normalized](../outputs/12521_loss_space_toy/forecasts_normalized.png)
 
-**Forecast evolution — `forecast_evolution_original.png`.** Probe forecast snapshotted
-through training, colored light→dark by step (colorbar = training step). The disparate
-*rate* is explicit: `var10`/`var100` lock onto the target within a few hundred steps
-(early colors already overlay the black target), while `var1`'s predictions crawl up from
-purple and only the latest (yellow) snapshots approach it.
+**Forecast evolution — `forecast_evolution_original.png`.** Small-multiples grid (rows =
+category, columns = log-spaced training steps); each cell zooms into the forecast — target
+(black) vs prediction (red) — annotated with its normalized error. Read *down* an early
+column: by step ~200 `var10`/`var100` already match the target (nMSE ~1e-3) while `var1` is
+still far off (nMSE ~4e-1) — the disparate rate in one glance. Read *across* a row to see
+that category converge.
 
-![forecast evolution original](../outputs/loss_space_toy/forecast_evolution_original.png)
+![forecast evolution original](../outputs/12521_loss_space_toy/forecast_evolution_original.png)
 
 Under normalized-space loss all three converge on a similar timescale:
 
-![forecast evolution normalized](../outputs/loss_space_toy/forecast_evolution_normalized.png)
+![forecast evolution normalized](../outputs/12521_loss_space_toy/forecast_evolution_normalized.png)
 
 ## Reproduce
 

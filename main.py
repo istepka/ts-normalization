@@ -21,8 +21,11 @@ import torch
 import wandb
 from omegaconf import DictConfig, OmegaConf
 
+from src.captions import write_captions
 from src.data import SyntheticTSDataset
 from src.plots import (
+    gif_forecast_evolution,
+    gif_nmse_convergence,
     plot_forecast_evolution,
     plot_global_nmse,
     plot_grad_magnitude,
@@ -114,55 +117,112 @@ def main(cfg: DictConfig):
 
     names = results["normalized"]["dataset"].category_names
 
-    # Write metrics before plotting so a plotting hiccup never wastes a full run.
+    # Write metrics + forecast snapshot data before plotting, so a plotting hiccup
+    # never wastes a full run and figures can be restyled later without retraining
+    # (see scripts/replot_forecasts.py).
     summary = verification_summary(results, names)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
+    for label in ("normalized", "original"):
+        h = results[label]["histories"][-1]
+        np.savez(
+            out_dir / f"forecast_data_{label}.npz",
+            names=np.array(names),
+            steps=np.array(h["forecast_steps"]),
+            pred=np.array(h["forecast_pred"]),
+            context=h["probe_context"],
+            target=h["probe_target"],
+        )
 
+    render_figures(cfg, results, names, out_dir)
+
+
+def render_figures(cfg, results, names, out_dir: Path):
+    """Render every figure twice — a screen version (PNG+PDF, titles) into `out_dir`
+    and a paper version (PDF only, no titles, minimal margins) into the sibling
+    `{out_dir}_paper` directory with per-figure caption files — plus the GIFs."""
     band = cfg.plot.band
+    paper_dir = out_dir.parent / f"{out_dir.name}_paper"
+    paper_dir.mkdir(parents=True, exist_ok=True)
+
+    for target, paper in ((out_dir, False), (paper_dir, True)):
+        plot_nmse_panels(
+            results,
+            names,
+            ["normalized", "original"],
+            ["Normalized-space loss", "Original-space loss"],
+            band,
+            target / "nmse_core.png",
+            paper,
+        )
+        plot_nmse_panels(
+            results,
+            names,
+            ["original_equalvar", "original_gradmatch"],
+            ["Original + equal variance", "Original + grad-norm matched"],
+            band,
+            target / "nmse_controls.png",
+            paper,
+        )
+        plot_global_nmse(results, SETUP_LABELS, band, target / "nmse_global.png", paper)
+        plot_grad_magnitude(results, names, band, target / "grad_magnitude.png", paper)
+        for label in ("original", "normalized"):
+            plot_qualitative(
+                cfg,
+                results[label]["dataset"],
+                results[label]["model"],
+                target / f"forecasts_{label}.png",
+                paper,
+            )
+            plot_forecast_evolution(
+                results[label]["histories"][-1],
+                names,
+                f"Forecast evolution — {label}-space loss",
+                cfg.train.forecast_columns,
+                target / f"forecast_evolution_{label}.png",
+                paper,
+            )
+    write_captions(paper_dir)
+
+    # Linear-scale companions (screen dir only) so magnitudes can be sanity-checked
+    # against the log-scale figures, which compress the per-category separation.
     plot_nmse_panels(
         results,
         names,
-        labels=["normalized", "original"],
-        titles=["Normalized-space loss", "Original-space loss"],
-        band=band,
-        out_path=out_dir / "nmse_core.png",
+        ["normalized", "original"],
+        ["Normalized-space loss", "Original-space loss"],
+        band,
+        out_dir / "nmse_core_linear.png",
+        paper=False,
+        yscale="linear",
     )
     plot_nmse_panels(
         results,
         names,
-        labels=["original_equalvar", "original_gradmatch"],
-        titles=["Original + equal variance", "Original + grad-norm matched"],
-        band=band,
-        out_path=out_dir / "nmse_controls.png",
+        ["original_equalvar", "original_gradmatch"],
+        ["Original + equal variance", "Original + grad-norm matched"],
+        band,
+        out_dir / "nmse_controls_linear.png",
+        paper=False,
+        yscale="linear",
     )
-    plot_global_nmse(results, SETUP_LABELS, band, out_dir / "nmse_global.png")
-    plot_grad_magnitude(results, names, band, out_dir / "grad_magnitude.png")
-    plot_qualitative(
-        cfg,
-        results["original"]["dataset"],
-        results["original"]["model"],
-        out_dir / "forecasts_original.png",
+    plot_global_nmse(
+        results,
+        SETUP_LABELS,
+        band,
+        out_dir / "nmse_global_linear.png",
+        paper=False,
+        yscale="linear",
     )
-    plot_qualitative(
-        cfg,
-        results["normalized"]["dataset"],
-        results["normalized"]["model"],
-        out_dir / "forecasts_normalized.png",
-    )
-    # Forecast evolution (one representative seed) — the disparate convergence rate.
-    plot_forecast_evolution(
-        results["original"]["histories"][-1],
-        names,
-        "Forecast evolution — original-space loss",
-        out_dir / "forecast_evolution_original.png",
-    )
-    plot_forecast_evolution(
-        results["normalized"]["histories"][-1],
-        names,
-        "Forecast evolution — normalized-space loss",
-        out_dir / "forecast_evolution_normalized.png",
-    )
+
+    # Animations for talks / website (screen dir only).
+    for label in ("original", "normalized"):
+        gif_forecast_evolution(
+            results[label]["histories"][-1],
+            names,
+            out_dir / f"forecast_evolution_{label}.gif",
+        )
+    gif_nmse_convergence(results, names, band, out_dir / "nmse_convergence.gif")
 
 
 if __name__ == "__main__":

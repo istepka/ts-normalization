@@ -33,22 +33,29 @@ class Trainer:
         self.category_names = dataset.category_names
 
         self.snapshot_steps = self._build_snapshot_steps(
-            cfg.train.forecast_schedule, cfg.train.steps
+            cfg.train.forecast_schedule, cfg.train.forecast_columns, cfg.train.steps
         )
         self.probe_context, self.probe_target = self._build_probe(dataset)
+        self.val_context = dataset.val_context.to(self.device)
+        self.val_target = dataset.val_target.to(self.device)
+        self.val_category = dataset.val_category.to(self.device)
 
         torch.manual_seed(cfg.seed)  # identical init across runs
         self.model = PatchTransformer(cfg).to(self.device)
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=cfg.train.lr)
+        optimizers = {"sgd": torch.optim.SGD, "adam": torch.optim.Adam}
+        self.optimizer = optimizers[cfg.train.optimizer](
+            self.model.parameters(), lr=cfg.train.lr
+        )
 
     @staticmethod
-    def _build_snapshot_steps(schedule, total: int) -> set[int]:
+    def _build_snapshot_steps(schedule, columns, total: int) -> set[int]:
         steps, start = set(), 0
         for segment in schedule:
             until = min(segment.until, total)
             steps.update(range(start, until, segment.every))
             start = until
         steps.add(total - 1)  # always snapshot the final state
+        steps.update(min(int(c), total - 1) for c in columns)  # forced figure columns
         return steps
 
     def _build_probe(self, dataset: SyntheticTSDataset):
@@ -91,9 +98,7 @@ class Trainer:
             self.optimizer.step()
 
             if step % self.eval_every == 0:
-                sample_nmse = per_sample_nmse(z_pred, z_target)
-                nmse = self._per_category(sample_nmse, category)
-                global_nmse = sample_nmse.detach().mean().item()
+                nmse, global_nmse = self._eval_val()
                 grad_per_row = z_pred.grad.detach().pow(2).sum(dim=1).sqrt()
                 grad_mag = self._per_category(grad_per_row, category)
                 history["step"].append(step)
@@ -105,6 +110,21 @@ class Trainer:
         history["probe_context"] = self.probe_context.cpu().numpy()
         history["probe_target"] = self.probe_target.numpy()
         return history
+
+    def _eval_val(self) -> tuple[np.ndarray, float]:
+        """Per-category and global nMSE (normalized space) on the fixed held-out
+        validation windows -- a large, low-variance estimate, unlike the 8-window
+        training minibatch. Always measured in normalized space so the two loss
+        spaces are comparable."""
+        self.model.eval()
+        with torch.no_grad():
+            z_pred, a, b = self.model(self.val_context)
+            z_target = normalize_target(self.val_target, a, b)
+            sample_nmse = per_sample_nmse(z_pred, z_target)
+        self.model.train()
+        return self._per_category(
+            sample_nmse, self.val_category
+        ), sample_nmse.mean().item()
 
     def _probe_forecast(self) -> np.ndarray:
         """Denormalized horizon prediction on the fixed probe, [num_categories, H]."""
