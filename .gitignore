@@ -1,3 +1,13 @@
+overleaf/ 
+wandb/
+outputs/
+logs/
+uv.lock
+.agents/
+CLAUDE.md
+AGENTS.md
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

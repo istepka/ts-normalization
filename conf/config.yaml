@@ -1,0 +1,67 @@
+# Loss-space comparison toy. Single source of truth; code accesses keys
+# directly and will fail if any key is missing (no fail-safe defaults).
+
+seed: 0 # base seed; the actual repeats use the `seeds` list below
+seeds: [0, 1, 2, 3, 4] # each setup is rerun once per seed; plots show mean +/- 1 band
+device: cpu
+output_dir: outputs/loss_space_toy
+
+data:
+  # Distinct learnable patterns (different freq/phase) so categories are NOT
+  # identical after instance normalization, sharing the same mean but living
+  # on different variance scales (variance is purely amplitude-driven).
+  mean: 1.0
+  # scale is the sine amplitude; variance = scale^2 / 2. Amplitudes sqrt(2*v)
+  # give target variances v in {1, 10, 100} (ratio 1:10:100), matching the draft.
+  # Verified stable (no divergence) and clearly disparate in original space.
+  categories:
+    - {name: var1, freq: 1.0, phase: 0.0, scale: 1.4142135624}
+    - {name: var10, freq: 2.0, phase: 1.0471975512, scale: 4.4721359550}
+    - {name: var100, freq: 3.0, phase: 2.0943951024, scale: 14.1421356237}
+  cycle_length: 32 # samples per unit frequency
+  series_length: 2048
+  series_per_category: 8
+  context_length: 64
+  horizon: 16
+  # Control: collapse all categories to scale 1.0 (disparity must vanish).
+  equal_variance: false
+
+model:
+  patch_length: 8
+  d_model: 64
+  n_heads: 4
+  n_layers: 2
+  dim_feedforward: 128
+  dropout: 0.0
+  norm_eps: 1.0e-5
+
+train:
+  steps: 30000
+  batch_size: 24 # must be divisible by number of categories
+  lr: 1.0e-3
+  eval_every: 100 # cadence for scalar metric curves (nMSE, grad mag)
+  # Control: rescale the full gradient to unit global norm each step, removing
+  # the global learning-rate inflation so only per-category disparity remains.
+  grad_norm_match: false
+  # Non-uniform schedule for qualitative forecast snapshots: dense early (where
+  # the disparate convergence rate is visible), sparse later. Each segment adds
+  # steps in [start, until) spaced by `every`; the final step is always included.
+  forecast_schedule:
+    - {until: 1000, every: 200}
+    - {until: 10000, every: 1000}
+    - {until: 1000000, every: 10000}
+
+plot:
+  band: std # shaded band around the across-seed mean: std | se
+
+# Loss spaces to compare. Each is trained from identical init and data order.
+modes: [normalized, original]
+
+wandb:
+  entity: ts-normalization
+  project: loss_space_comparison
+  mode: online # online | offline | disabled
+  # Tag shared by all runs of one regeneration batch; bump it when rerunning so
+  # old/messy runs can be filtered out. Runs are grouped per setup, tagged with
+  # the setup, loss mode, seed, and variance ratio for easy tracking in the UI.
+  experiment: var_1_10_100
