@@ -28,12 +28,15 @@ class Trainer:
         self.wandb_run = wandb_run
         self.device = torch.device(cfg.device)
         self.grad_norm_match = cfg.train.grad_norm_match
-        self.eval_every = cfg.train.eval_every
         self.num_categories = dataset.num_categories
         self.category_names = dataset.category_names
 
-        self.snapshot_steps = self._build_snapshot_steps(
-            cfg.train.forecast_schedule, cfg.train.forecast_columns, cfg.train.steps
+        self.eval_steps = self._segment_steps(cfg.train.eval_schedule, cfg.train.steps)
+        self.snapshot_steps = self._segment_steps(
+            cfg.train.forecast_schedule, cfg.train.steps
+        )
+        self.snapshot_steps.update(
+            min(int(c), cfg.train.steps - 1) for c in cfg.train.forecast_columns
         )
         self.probe_context, self.probe_target = self._build_probe(dataset)
         self.val_context = dataset.val_context.to(self.device)
@@ -48,14 +51,15 @@ class Trainer:
         )
 
     @staticmethod
-    def _build_snapshot_steps(schedule, columns, total: int) -> set[int]:
+    def _segment_steps(schedule, total: int) -> set[int]:
+        """Step indices from a list of {until, every} segments (dense-early schedule),
+        always including the final step."""
         steps, start = set(), 0
         for segment in schedule:
             until = min(segment.until, total)
             steps.update(range(start, until, segment.every))
             start = until
-        steps.add(total - 1)  # always snapshot the final state
-        steps.update(min(int(c), total - 1) for c in columns)  # forced figure columns
+        steps.add(total - 1)
         return steps
 
     def _build_probe(self, dataset: SyntheticTSDataset):
@@ -97,7 +101,7 @@ class Trainer:
                 self._rescale_to_unit_norm()
             self.optimizer.step()
 
-            if step % self.eval_every == 0:
+            if step in self.eval_steps:
                 nmse, global_nmse = self._eval_val()
                 grad_per_row = z_pred.grad.detach().pow(2).sum(dim=1).sqrt()
                 grad_mag = self._per_category(grad_per_row, category)

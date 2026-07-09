@@ -14,6 +14,7 @@ import numpy as np
 from src.plots import plot_forecast_evolution
 
 out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "outputs/loss_space_toy")
+columns = [0, 100, 200, 500, 1000, 30000]
 
 titles = {
     "normalized": "Forecast evolution — normalized-space loss",
@@ -29,6 +30,6 @@ for label, title in titles.items():
     }
     names = list(data["names"])
     plot_forecast_evolution(
-        history, names, title, out_dir / f"forecast_evolution_{label}.png"
+        history, names, title, columns, out_dir / f"forecast_evolution_{label}.png"
     )
     print(f"replotted {label}")

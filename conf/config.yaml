@@ -48,7 +48,13 @@ train:
   optimizer: sgd # sgd exposes the raw b^2=sigma^2 gradient weighting; adam's
   # per-coordinate RMS normalization divides out the global magnitude inflation
   lr: 1.0e-3
-  eval_every: 100 # cadence for scalar metric curves (nMSE, grad mag)
+  # Non-uniform eval cadence for the scalar metric curves (nMSE, grad mag): dense at
+  # the start where convergence happens, sparse later. Same {until, every} segment
+  # format as forecast_schedule; the final step is always included.
+  eval_schedule:
+    - {until: 200, every: 5}
+    - {until: 1000, every: 50}
+    - {until: 1000000, every: 1000}
   # Control: rescale the full gradient to unit global norm each step, removing
   # the global learning-rate inflation so only per-category disparity remains.
   grad_norm_match: false
@@ -65,6 +71,9 @@ train:
 
 plot:
   band: std # shaded band around the across-seed mean: std | se
+  # The linear-scale companion figures are saved once per zoom window (first N steps),
+  # where essentially all convergence happens (the full range crushes it into the y-axis).
+  linear_xlim: [200, 500, 2000]
 
 # Loss spaces to compare. Each is trained from identical init and data order.
 modes: [normalized, original]

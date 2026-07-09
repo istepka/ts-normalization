@@ -133,6 +133,18 @@ def main(cfg: DictConfig):
             context=h["probe_context"],
             target=h["probe_target"],
         )
+    # Per-step metric histories for every setup, stacked over seeds, so the nMSE
+    # figures can be restyled/zoomed later without retraining (scripts/replot_metrics.py).
+    for label in SETUP_LABELS:
+        hs = results[label]["histories"]
+        np.savez(
+            out_dir / f"metrics_{label}.npz",
+            names=np.array(names),
+            step=np.array(hs[0]["step"]),
+            nmse=np.array([np.stack(h["nmse"], axis=0) for h in hs]),  # [S, E, C]
+            global_nmse=np.array([h["global_nmse"] for h in hs]),  # [S, E]
+            grad_mag=np.array([np.stack(h["grad_mag"], axis=0) for h in hs]),  # [S,E,C]
+        )
 
     render_figures(cfg, results, names, out_dir)
 
@@ -184,35 +196,44 @@ def render_figures(cfg, results, names, out_dir: Path):
             )
     write_captions(paper_dir)
 
-    # Linear-scale companions (screen dir only) so magnitudes can be sanity-checked
-    # against the log-scale figures, which compress the per-category separation.
-    plot_nmse_panels(
-        results,
-        names,
-        ["normalized", "original"],
-        ["Normalized-space loss", "Original-space loss"],
-        band,
-        out_dir / "nmse_core_linear.png",
-        paper=False,
-        yscale="linear",
-    )
-    plot_nmse_panels(
-        results,
-        names,
-        ["original_equalvar", "original_gradmatch"],
-        ["Original + equal variance", "Original + grad-norm matched"],
-        band,
-        out_dir / "nmse_controls_linear.png",
-        paper=False,
-        yscale="linear",
-    )
-    plot_global_nmse(
-        results,
-        SETUP_LABELS,
-        band,
-        out_dir / "nmse_global_linear.png",
-        paper=False,
-        yscale="linear",
+    # Linear-scale companions (screen dir only), one per zoom window over the first N
+    # steps where essentially all convergence happens (the full range crushes it flat).
+    for w in cfg.plot.linear_xlim:
+        xlim = (0, w)
+        plot_nmse_panels(
+            results,
+            names,
+            ["normalized", "original"],
+            ["Normalized-space loss", "Original-space loss"],
+            band,
+            out_dir / f"nmse_core_linear_{w}.png",
+            paper=False,
+            yscale="linear",
+            xlim=xlim,
+        )
+        plot_nmse_panels(
+            results,
+            names,
+            ["original_equalvar", "original_gradmatch"],
+            ["Original + equal variance", "Original + grad-norm matched"],
+            band,
+            out_dir / f"nmse_controls_linear_{w}.png",
+            paper=False,
+            yscale="linear",
+            xlim=xlim,
+        )
+        plot_global_nmse(
+            results,
+            SETUP_LABELS,
+            band,
+            out_dir / f"nmse_global_linear_{w}.png",
+            paper=False,
+            yscale="linear",
+            xlim=xlim,
+        )
+    # Linear-scale gradient-magnitude companion (screen dir only).
+    plot_grad_magnitude(
+        results, names, band, out_dir / "grad_magnitude_linear.png", yscale="linear"
     )
 
     # Animations for talks / website (screen dir only).

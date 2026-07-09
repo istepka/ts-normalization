@@ -30,33 +30,42 @@ def _save(fig, out_path: Path, paper: bool = False):
     plt.close(fig)
 
 
-def _mean_band(histories: list[dict], key: str, band: str):
+def _mean_band(histories: list[dict], key: str, band: str, space: str = "log"):
     """Stack a per-step metric across seeds; return (steps, center, lower, upper).
 
-    Statistics are computed in log10 space because every consumer plots on a log
-    y-axis and the per-seed nMSE spans orders of magnitude. A linear mean +/- std
-    band puts its lower edge below zero whenever std >= mean (which Adam's noisy
-    trajectories routinely produce); on a log axis matplotlib then clips that edge
-    to the axis floor and paints a misleadingly huge fill. center is the geometric
-    mean; the band is +/- one log-space std ("std") or std/sqrt(n) ("se"), so it is
-    always positive and symmetric in the space that is actually displayed.
+    `space` matches the axis the figure is drawn on, so the aggregation is honest:
+    - "log": geometric mean +/- log-space std. Needed on a log axis -- a linear
+      mean +/- std would dip below zero whenever std >= mean (which Adam's near-floor
+      noise routinely produces), and matplotlib clips that to the axis floor and
+      paints a misleadingly huge fill. Symmetric and positive in log space.
+    - "linear": ordinary arithmetic mean +/- std. The truthful absolute-scale view --
+      use it on linear axes so tiny near-floor fluctuations are not log-amplified into
+      large-looking swings.
 
-    `band` selects the halfwidth: "std" = 1 standard deviation across seeds,
-    "se" = std / sqrt(n_seeds)."""
+    `band` selects the halfwidth: "std" = 1 SD across seeds, "se" = std / sqrt(n)."""
     steps = histories[0]["step"]
     arr = np.array([np.stack(h[key], axis=0) for h in histories])  # [S, E, ...]
-    log = np.log10(arr)
-    mean = log.mean(axis=0)
-    std = log.std(axis=0, ddof=1)
+    work = np.log10(arr) if space == "log" else arr
+    mean = work.mean(axis=0)
+    std = work.std(axis=0, ddof=1)
     if band == "se":
         std = std / np.sqrt(arr.shape[0])
     elif band != "std":
         raise ValueError(f"unknown band: {band}")
-    return steps, 10**mean, 10 ** (mean - std), 10 ** (mean + std)
+    if space == "log":
+        return steps, 10**mean, 10 ** (mean - std), 10 ** (mean + std)
+    if space == "linear":
+        return steps, mean, mean - std, mean + std
+    raise ValueError(f"unknown space: {space}")
 
 
-def _nmse_curve(ax, histories, names, band, *, title, show_ylabel, show_legend, yscale):
-    steps, mean, lo, hi = _mean_band(histories, "nmse", band)  # [n_eval, num_cat]
+def _nmse_curve(
+    ax, histories, names, band, *, title, show_ylabel, show_legend, yscale, xlim
+):
+    space = "linear" if yscale == "linear" else "log"
+    steps, mean, lo, hi = _mean_band(
+        histories, "nmse", band, space
+    )  # [n_eval, num_cat]
     for c, name in enumerate(names):
         (line,) = ax.plot(steps, mean[:, c], label=name)
         ax.fill_between(
@@ -67,9 +76,11 @@ def _nmse_curve(ax, histories, names, band, *, title, show_ylabel, show_legend, 
             alpha=0.25,
             linewidth=0,
         )
-    gsteps, gmean, _, _ = _mean_band(histories, "global_nmse", band)
+    gsteps, gmean, _, _ = _mean_band(histories, "global_nmse", band, space)
     ax.plot(gsteps, gmean, label="global", **GLOBAL_STYLE)
     ax.set_yscale(yscale)
+    if xlim is not None:
+        ax.set_xlim(*xlim)
     ax.set_xlabel("step")
     if show_ylabel:
         ax.set_ylabel("nMSE")
@@ -80,7 +91,7 @@ def _nmse_curve(ax, histories, names, band, *, title, show_ylabel, show_legend, 
 
 
 def plot_nmse_panels(
-    results, names, labels, titles, band, out_path, paper=False, yscale="log"
+    results, names, labels, titles, band, out_path, paper=False, yscale="log", xlim=None
 ):
     fig, axes = plt.subplots(
         1, len(labels), figsize=(6 * len(labels), 4.5), sharey=True
@@ -97,17 +108,21 @@ def plot_nmse_panels(
             show_ylabel=(j == 0),
             show_legend=(j == 0),
             yscale=yscale,
+            xlim=xlim,
         )
     fig.tight_layout()
     _save(fig, out_path, paper)
 
 
-def plot_global_nmse(results, labels, band, out_path, paper=False, yscale="log"):
+def plot_global_nmse(
+    results, labels, band, out_path, paper=False, yscale="log", xlim=None
+):
     """Global nMSE (averaged over all categories) vs step, mean +/- 1 band per setup."""
+    space = "linear" if yscale == "linear" else "log"
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
     for label in labels:
         steps, mean, lo, hi = _mean_band(
-            results[label]["histories"], "global_nmse", band
+            results[label]["histories"], "global_nmse", band, space
         )
         (line,) = ax.plot(steps, mean, label=label)
         ax.fill_between(
@@ -119,6 +134,8 @@ def plot_global_nmse(results, labels, band, out_path, paper=False, yscale="log")
             linewidth=0,
         )
     ax.set_yscale(yscale)
+    if xlim is not None:
+        ax.set_xlim(*xlim)
     ax.set_xlabel("step")
     ax.set_ylabel("global nMSE")
     if not paper:
@@ -128,7 +145,7 @@ def plot_global_nmse(results, labels, band, out_path, paper=False, yscale="log")
     _save(fig, out_path, paper)
 
 
-def plot_grad_magnitude(results, names, band, out_path, paper=False):
+def plot_grad_magnitude(results, names, band, out_path, paper=False, yscale="log"):
     """Per-category gradient magnitude at init (step 0), where the b^2 = sigma^2
     scaling of the original-space gradient is exact. Bars are mean +/- 1 band."""
     fig, ax = plt.subplots(figsize=(6, 4.5))
@@ -140,7 +157,7 @@ def plot_grad_magnitude(results, names, band, out_path, paper=False):
         std = grads.std(axis=0, ddof=1)
         half = std if band == "std" else std / np.sqrt(grads.shape[0])
         ax.bar(x + offset, mean, width, yerr=half, capsize=3, label=label)
-    ax.set_yscale("log")
+    ax.set_yscale(yscale)
     ax.set_xticks(x)
     ax.set_xticklabels(names)
     ax.set_xlabel("category (increasing variance)")
