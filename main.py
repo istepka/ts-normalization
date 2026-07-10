@@ -22,7 +22,7 @@ import wandb
 from omegaconf import DictConfig, OmegaConf
 
 from src.captions import write_captions
-from src.data import SyntheticTSDataset
+from src.data import RealShapeScaledDataset, SyntheticTSDataset
 from src.plots import (
     gif_forecast_evolution,
     gif_nmse_convergence,
@@ -35,6 +35,10 @@ from src.plots import (
 from src.train import Trainer
 
 SETUP_LABELS = ["normalized", "original", "original_equalvar", "original_gradmatch"]
+DATASETS = {
+    "synthetic": SyntheticTSDataset,
+    "real_shape_scaled": RealShapeScaledDataset,
+}
 
 
 def build_run_specs(cfg: DictConfig, seed: int) -> list[tuple[str, DictConfig, str]]:
@@ -96,7 +100,7 @@ def main(cfg: DictConfig):
     for seed in cfg.seeds:
         for label, run_cfg, mode in build_run_specs(cfg, seed):
             generator = torch.Generator().manual_seed(run_cfg.seed)
-            dataset = SyntheticTSDataset(run_cfg, generator)
+            dataset = DATASETS[run_cfg.data.kind](run_cfg, generator)
             wandb_run = wandb.init(
                 entity=cfg.wandb.entity,
                 project=cfg.wandb.project,

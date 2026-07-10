@@ -1,13 +1,13 @@
-"""Synthetic time series for the loss-space comparison toy.
+"""Datasets for the loss-space comparison toy.
 
-Categories are *distinct* learnable patterns (different frequency and phase) that
-share the same mean but live on different variance scales (variance is purely
-amplitude-driven). After instance normalization they remain distinguishable, so a
-shared model must allocate capacity to each, which is what lets the original-space
-loss expose disparate per-category learning under heterogeneous variance.
+The default synthetic dataset uses distinct sine patterns. The real-shape scaled
+variant reuses windows from real series, normalizes each base window with its
+context statistics, then creates category copies whose only intended difference is
+the configured amplitude scale.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -39,7 +39,13 @@ class SyntheticTSDataset:
         self.num_categories = len(cfg.data.categories)
 
         self.windows = self._build_windows(cfg, train=True)  # [n_windows, win_len] each
-        self.batch_schedule = self._build_schedule(cfg, generator)
+        self.batch_schedule = build_stratified_schedule(
+            self.windows,
+            self.context_length,
+            cfg.train.batch_size,
+            cfg.train.steps,
+            generator,
+        )
         self._build_val_set(cfg)
 
     def _build_windows(self, cfg: DictConfig, *, train: bool) -> list[torch.Tensor]:
@@ -94,32 +100,147 @@ class SyntheticTSDataset:
         idx = np.arange(self.window_length)[None, :] + np.arange(n)[:, None]
         return signal[idx]
 
-    def _build_schedule(
-        self, cfg: DictConfig, generator: torch.Generator
-    ) -> list[Batch]:
-        batch_size = cfg.train.batch_size
-        if batch_size % self.num_categories != 0:
-            raise ValueError(
-                f"batch_size {batch_size} must be divisible by "
-                f"num_categories {self.num_categories}"
-            )
-        per_category = batch_size // self.num_categories
-        steps = cfg.train.steps
 
-        schedule = []
-        for _ in range(steps):
-            contexts, targets, categories = [], [], []
-            for c, windows in enumerate(self.windows):
-                pick = torch.randint(len(windows), (per_category,), generator=generator)
-                chosen = windows[pick]
-                contexts.append(chosen[:, : self.context_length])
-                targets.append(chosen[:, self.context_length :])
-                categories.append(torch.full((per_category,), c, dtype=torch.long))
-            schedule.append(
-                Batch(
-                    context=torch.cat(contexts, dim=0),
-                    target=torch.cat(targets, dim=0),
-                    category=torch.cat(categories, dim=0),
-                )
+class RealShapeScaledDataset:
+    """Real window shapes copied across variance categories.
+
+    The input `.npz` must contain the array named by `cfg.data.real_shape_key`.
+    Supported shapes:
+    - `[N, context+horizon]`: precomputed windows.
+    - `[N, T]` or `[T]`: raw series, converted into sliding windows.
+
+    Each base window is normalized using its context mean/std and then rescaled
+    by each configured category scale. This keeps the normalized shape identical
+    across categories while preserving the same variance intervention as the sine
+    experiment.
+    """
+
+    def __init__(self, cfg: DictConfig, generator: torch.Generator):
+        self.context_length = cfg.data.context_length
+        self.horizon = cfg.data.horizon
+        self.window_length = self.context_length + self.horizon
+        self.category_names = [c.name for c in cfg.data.categories]
+        self.num_categories = len(cfg.data.categories)
+
+        base = self._load_base_windows(cfg)
+        train_base, val_base = self._split_base_windows(base, cfg)
+        self.windows = self._scaled_category_windows(train_base, cfg)
+        val_windows = self._scaled_category_windows(val_base, cfg)
+        self.batch_schedule = build_stratified_schedule(
+            self.windows,
+            self.context_length,
+            cfg.train.batch_size,
+            cfg.train.steps,
+            generator,
+        )
+        self._build_val_set(val_windows, cfg)
+
+    def _load_base_windows(self, cfg: DictConfig) -> torch.Tensor:
+        data = np.load(Path(cfg.data.real_shape_path))
+        arr = np.asarray(data[cfg.data.real_shape_key], dtype=np.float64)
+        if arr.ndim == 1:
+            windows = self._sliding_windows(arr)
+        elif arr.ndim == 2 and arr.shape[1] == self.window_length:
+            windows = arr
+        elif arr.ndim == 2 and arr.shape[1] > self.window_length:
+            windows = np.concatenate(
+                [self._sliding_windows(series) for series in arr], axis=0
             )
-        return schedule
+        else:
+            raise ValueError(
+                f"{cfg.data.real_shape_key} must have shape [T], "
+                f"[N, T] with T > {self.window_length}, or "
+                f"[N, {self.window_length}]"
+            )
+
+        finite = np.isfinite(windows).all(axis=1)
+        context = windows[:, : self.context_length]
+        std = context.std(axis=1)
+        keep = finite & (std > 0.0)
+        if not np.any(keep):
+            raise ValueError("real-shape input has no finite, non-constant windows")
+        windows = windows[keep]
+        context = windows[:, : self.context_length]
+        mean = context.mean(axis=1, keepdims=True)
+        std = context.std(axis=1, keepdims=True)
+        base = (windows - mean) / std
+        return torch.from_numpy(base).float()
+
+    def _split_base_windows(
+        self, windows: torch.Tensor, cfg: DictConfig
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        gen = torch.Generator().manual_seed(VAL_SEED)
+        order = torch.randperm(len(windows), generator=gen)
+        n_val = int(len(windows) * cfg.data.real_shape_val_fraction)
+        if n_val == 0 or n_val == len(windows):
+            raise ValueError("real_shape_val_fraction leaves an empty train/val split")
+        val_idx = order[:n_val]
+        train_idx = order[n_val:]
+        return windows[train_idx], windows[val_idx]
+
+    def _scaled_category_windows(
+        self, base_windows: torch.Tensor, cfg: DictConfig
+    ) -> list[torch.Tensor]:
+        out = []
+        for category in cfg.data.categories:
+            scale = 1.0 if cfg.data.equal_variance else category.scale
+            out.append(cfg.data.mean + scale * base_windows)
+        return out
+
+    def _sliding_windows(self, signal: np.ndarray) -> np.ndarray:
+        n = len(signal) - self.window_length + 1
+        if n <= 0:
+            raise ValueError(
+                f"series length {len(signal)} must exceed window length "
+                f"{self.window_length}"
+            )
+        idx = np.arange(self.window_length)[None, :] + np.arange(n)[:, None]
+        return signal[idx]
+
+    def _build_val_set(self, val_windows: list[torch.Tensor], cfg: DictConfig):
+        n = cfg.data.val_windows_per_category
+        gen = torch.Generator().manual_seed(VAL_SEED)
+        contexts, targets, categories = [], [], []
+        for c, windows in enumerate(val_windows):
+            pick = torch.randint(len(windows), (n,), generator=gen)
+            chosen = windows[pick]
+            contexts.append(chosen[:, : self.context_length])
+            targets.append(chosen[:, self.context_length :])
+            categories.append(torch.full((n,), c, dtype=torch.long))
+        self.val_context = torch.cat(contexts, dim=0)
+        self.val_target = torch.cat(targets, dim=0)
+        self.val_category = torch.cat(categories, dim=0)
+
+
+def build_stratified_schedule(
+    windows_per_category: list[torch.Tensor],
+    context_length: int,
+    batch_size: int,
+    steps: int,
+    generator: torch.Generator,
+) -> list[Batch]:
+    num_categories = len(windows_per_category)
+    if batch_size % num_categories != 0:
+        raise ValueError(
+            f"batch_size {batch_size} must be divisible by "
+            f"num_categories {num_categories}"
+        )
+    per_category = batch_size // num_categories
+
+    schedule = []
+    for _ in range(steps):
+        contexts, targets, categories = [], [], []
+        for c, windows in enumerate(windows_per_category):
+            pick = torch.randint(len(windows), (per_category,), generator=generator)
+            chosen = windows[pick]
+            contexts.append(chosen[:, :context_length])
+            targets.append(chosen[:, context_length:])
+            categories.append(torch.full((per_category,), c, dtype=torch.long))
+        schedule.append(
+            Batch(
+                context=torch.cat(contexts, dim=0),
+                target=torch.cat(targets, dim=0),
+                category=torch.cat(categories, dim=0),
+            )
+        )
+    return schedule
