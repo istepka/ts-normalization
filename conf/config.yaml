@@ -5,16 +5,45 @@ seed: 0 # base seed; the actual repeats use the `seeds` list below
 seeds: [0, 1, 2, 3, 4] # each setup is rerun once per seed; plots show mean +/- 1 band
 device: cpu
 output_dir: outputs/loss_space_toy
+setups: [normalized, original, original_equalvar, original_gradmatch]
 
 data:
-  kind: synthetic # synthetic | real_shape_scaled | real_variance_binned
-  # Real-data input. Used with `data.kind=real_shape_scaled` and
-  # `data.kind=real_variance_binned`; the npz array is either precomputed windows
-  # [N, context+horizon] or raw series [N, T] / [T].
+  # synthetic | real_shape_scaled | real_variance_binned | real_scale_swap
+  kind: synthetic
+  # Real-data input. Used by all real-data kinds; the npz array is either
+  # precomputed windows [N, context+horizon] or raw series [N, T] / [T].
   real_shape_path: data/real_shape_windows.npz
   real_shape_key: windows
   real_shape_val_fraction: 0.2
   real_value_scale: 1.0 # global multiplier for real-data windows
+  # Exact local sources and post-normalization scales for real_scale_swap.
+  real_source_root: /zfsauton2/home/istepka/sstc/experiments/h1/data
+  real_sources:
+    - name: electricity
+      path: ${data.real_source_root}/128_electricity.npz
+      key: data
+    - name: traffic
+      path: ${data.real_source_root}/128_traffic.npz
+      key: data
+    - name: solar_10_minutes
+      path: ${data.real_source_root}/128_solar_10_minutes.npz
+      key: data
+    - name: taxi_30min
+      path: ${data.real_source_root}/128_taxi_30min.npz
+      key: data
+    - name: wind_farms_without_missing
+      path: ${data.real_source_root}/128_wind_farms_without_missing.npz
+      key: data
+    - name: pedestrian_counts
+      path: ${data.real_source_root}/128_pedestrian_counts.npz
+      key: data
+    - name: kdd_cup_2018_without_missing
+      path: ${data.real_source_root}/128_kdd_cup_2018_without_missing.npz
+      key: data
+    - name: fred_md
+      path: ${data.real_source_root}/128_fred_md.npz
+      key: data
+  scale_assignment: [1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 10.0]
   # Distinct learnable patterns (different freq/phase) so categories are NOT
   # identical after instance normalization, sharing the same mean but living
   # on different variance scales (variance is purely amplitude-driven).
@@ -78,6 +107,7 @@ train:
   forecast_columns: [0, 100, 200, 500, 1000, 30000]
 
 plot:
+  render: true
   band: std # shaded band around the across-seed mean: std | se
   # The linear-scale companion figures are saved once per zoom window (first N steps),
   # where essentially all convergence happens (the full range crushes it into the y-axis).

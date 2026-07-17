@@ -94,6 +94,8 @@ class Trainer:
             z_pred.retain_grad()  # to read d loss / d z_pred per category
             z_target = normalize_target(target, a, b)
             loss = compute_loss(self.mode, z_pred, z_target, b)
+            if step in self.eval_steps:
+                self._require_finite(loss, "training loss", step)
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -103,8 +105,11 @@ class Trainer:
 
             if step in self.eval_steps:
                 nmse, global_nmse = self._eval_val()
+                self._require_finite(nmse, "validation nMSE", step)
+                self._require_finite(global_nmse, "global validation nMSE", step)
                 grad_per_row = z_pred.grad.detach().pow(2).sum(dim=1).sqrt()
                 grad_mag = self._per_category(grad_per_row, category)
+                self._require_finite(grad_mag, "gradient magnitude", step)
                 history["step"].append(step)
                 history["train_loss"].append(loss.item())
                 history["nmse"].append(nmse)
@@ -114,6 +119,15 @@ class Trainer:
         history["probe_context"] = self.probe_context.cpu().numpy()
         history["probe_target"] = self.probe_target.numpy()
         return history
+
+    @staticmethod
+    def _require_finite(value, name: str, step: int):
+        if isinstance(value, torch.Tensor):
+            finite = torch.isfinite(value).all().item()
+        else:
+            finite = np.isfinite(value).all()
+        if not finite:
+            raise FloatingPointError(f"non-finite {name} at step {step}")
 
     def _eval_val(self) -> tuple[np.ndarray, float]:
         """Per-category and global nMSE (normalized space) on the fixed held-out

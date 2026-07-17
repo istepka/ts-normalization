@@ -23,6 +23,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from src.captions import write_captions
 from src.data import (
+    RealScaleSwapDataset,
     RealShapeScaledDataset,
     RealVarianceBinnedDataset,
     SyntheticTSDataset,
@@ -43,13 +44,12 @@ DATASETS = {
     "synthetic": SyntheticTSDataset,
     "real_shape_scaled": RealShapeScaledDataset,
     "real_variance_binned": RealVarianceBinnedDataset,
+    "real_scale_swap": RealScaleSwapDataset,
 }
 
 
 def build_run_specs(cfg: DictConfig, seed: int) -> list[tuple[str, DictConfig, str]]:
-    """Four setups at a fixed seed. normalized/original share the same seeded
-    dataset and init so they differ only in loss space; the controls reuse the
-    same seed."""
+    """Configured setups at a fixed seed with matched data and initialization."""
 
     def variant(**overrides):
         c = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
@@ -61,12 +61,20 @@ def build_run_specs(cfg: DictConfig, seed: int) -> list[tuple[str, DictConfig, s
     base = variant()
     equalvar = variant(**{"data.equal_variance": True})
     gradmatch = variant(**{"train.grad_norm_match": True})
-    return [
-        ("normalized", base, "normalized"),
-        ("original", base, "original"),
-        ("original_equalvar", equalvar, "original"),
-        ("original_gradmatch", gradmatch, "original"),
-    ]
+    specs = {
+        "normalized": ("normalized", base, "normalized"),
+        "original": ("original", base, "original"),
+        "original_equalvar": ("original_equalvar", equalvar, "original"),
+        "original_gradmatch": ("original_gradmatch", gradmatch, "original"),
+    }
+    setup_labels = list(cfg.setups)
+    supported = [SETUP_LABELS[:2], SETUP_LABELS]
+    if setup_labels not in supported:
+        raise ValueError(
+            "setups must be the normalized/original pair, optionally followed "
+            "by both controls"
+        )
+    return [specs[label] for label in setup_labels]
 
 
 def verification_summary(results: dict, names: list[str]) -> dict:
@@ -95,12 +103,15 @@ def verification_summary(results: dict, names: list[str]) -> dict:
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
+    setup_labels = list(cfg.setups)
+    if cfg.plot.render and setup_labels != SETUP_LABELS:
+        raise ValueError("plot.render requires all four standard setups")
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     results = {
         label: {"histories": [], "model": None, "dataset": None}
-        for label in SETUP_LABELS
+        for label in setup_labels
     }
     for seed in cfg.seeds:
         for label, run_cfg, mode in build_run_specs(cfg, seed):
@@ -144,7 +155,7 @@ def main(cfg: DictConfig):
         )
     # Per-step metric histories for every setup, stacked over seeds, so the nMSE
     # figures can be restyled/zoomed later without retraining (scripts/replot_metrics.py).
-    for label in SETUP_LABELS:
+    for label in setup_labels:
         hs = results[label]["histories"]
         np.savez(
             out_dir / f"metrics_{label}.npz",
@@ -155,7 +166,8 @@ def main(cfg: DictConfig):
             grad_mag=np.array([np.stack(h["grad_mag"], axis=0) for h in hs]),  # [S,E,C]
         )
 
-    render_figures(cfg, results, names, out_dir)
+    if cfg.plot.render:
+        render_figures(cfg, results, names, out_dir)
 
 
 def render_figures(cfg, results, names, out_dir: Path):

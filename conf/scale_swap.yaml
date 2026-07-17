@@ -1,0 +1,25 @@
+defaults:
+  - config
+  - _self_
+
+setups: [normalized, original]
+
+data:
+  kind: real_scale_swap
+  scale_assignment: [1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 10.0]
+
+model:
+  d_model: 128
+  n_heads: 8
+  n_layers: 4
+  dim_feedforward: 256
+
+train:
+  batch_size: 32
+  lr: 1.0e-4
+
+plot:
+  render: false
+
+wandb:
+  experiment: real_scale_swap_a

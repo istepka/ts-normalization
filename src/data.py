@@ -4,7 +4,9 @@ The default synthetic dataset uses distinct sine patterns. The real-shape scaled
 variant reuses windows from real series, normalizes each base window with its
 context statistics, then creates category copies whose only intended difference is
 the configured amplitude scale. The real-variance-binned variant groups natural
-real windows by context variance.
+real windows by context variance. The real scale-swap variant treats datasets as
+categories and applies a controlled scale to each dataset after context
+normalization.
 """
 
 from dataclasses import dataclass
@@ -12,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 VAL_SEED = 12345  # fixed -> the held-out validation set is identical across all runs
 
@@ -238,6 +240,55 @@ class RealVarianceBinnedDataset:
         self.val_context = torch.cat(contexts, dim=0)
         self.val_target = torch.cat(targets, dim=0)
         self.val_category = torch.cat(categories, dim=0)
+
+
+class RealScaleSwapDataset(RealShapeScaledDataset):
+    """Eight real datasets with controlled post-normalization scales.
+
+    Each source is split independently with the leakage-free real-window loader.
+    Windows are then context-normalized before the configured per-source scale is
+    applied. Source ordering is fixed so swapped assignments built from the same
+    seed use identical sampled windows and model initialization.
+    """
+
+    def __init__(self, cfg: DictConfig, generator: torch.Generator):
+        self.context_length = cfg.data.context_length
+        self.horizon = cfg.data.horizon
+        self.window_length = self.context_length + self.horizon
+        self.category_names = [source.name for source in cfg.data.real_sources]
+        self.num_categories = len(self.category_names)
+        scales = list(cfg.data.scale_assignment)
+        if len(scales) != self.num_categories:
+            raise ValueError("scale_assignment must contain one scale per real source")
+
+        train_by_source = []
+        val_by_source = []
+        for source, scale in zip(cfg.data.real_sources, scales):
+            source_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+            source_cfg.data.real_shape_path = source.path
+            source_cfg.data.real_shape_key = source.key
+            source_cfg.data.real_value_scale = 1.0
+            train_windows, val_windows = load_real_window_splits(
+                source_cfg, self.window_length, self.context_length
+            )
+            train_windows = context_normalize_windows(
+                train_windows, self.context_length, mean=0.0
+            )
+            val_windows = context_normalize_windows(
+                val_windows, self.context_length, mean=0.0
+            )
+            train_by_source.append(torch.from_numpy(scale * train_windows).float())
+            val_by_source.append(torch.from_numpy(scale * val_windows).float())
+
+        self.windows = train_by_source
+        self.batch_schedule = build_stratified_schedule(
+            self.windows,
+            self.context_length,
+            cfg.train.batch_size,
+            cfg.train.steps,
+            generator,
+        )
+        self._build_val_set(val_by_source, cfg)
 
 
 def load_real_window_splits(

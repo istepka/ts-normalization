@@ -123,3 +123,32 @@ remove the variance--forecast-difficulty confound.
 The single job `scripts/run_variance_bins_8datasets.sbatch` runs all eight datasets
 sequentially and invokes `scripts/aggregate_variance_bins.py` to produce the
 cross-dataset plots and numerical summary.
+
+## Eight-dataset scale-swap crossover
+
+The next experiment removes the natural variance--difficulty confound by making scale a
+controlled intervention. Each of the same eight datasets is split with the
+leakage-free series-level split, context-normalized window by window, and sampled
+equally within every batch. Assignment A gives scale `b=1` to Electricity, Traffic,
+Solar 10 Minutes, and Taxi, and `b=10` to Wind Farms, Pedestrian Counts, KDD Cup 2018,
+and FRED-MD. Assignment B swaps every scale while retaining dataset order, seeded
+sample schedules, and initialization.
+
+Only the normalized-space negative control and original-space treatment are run. The
+primary statistic is the paired within-dataset difference in mean log10-nMSE AUC through
+step 2,000:
+
+```text
+AUC(b=1) - AUC(b=10)
+```
+
+A positive value means the high-scale assignment converged faster. Original-space loss
+should produce a positive paired effect and an initialization gradient ratio near
+`10^2=100`; normalized-space loss should remain invariant to the assigned scale. The 95%
+Student-t interval uses the eight paired dataset effects as independent units after
+averaging the five seeds within each dataset.
+
+The job `scripts/run_scale_swap_8datasets.sbatch` runs both assignments and then invokes
+`scripts/aggregate_scale_swap.py`. It produces early convergence curves with
+dataset-level confidence intervals, a paired AUC figure, an
+initialization-gradient-ratio figure, and a JSON numerical summary.
