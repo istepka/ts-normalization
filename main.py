@@ -22,7 +22,11 @@ import wandb
 from omegaconf import DictConfig, OmegaConf
 
 from src.captions import write_captions
-from src.data import RealShapeScaledDataset, SyntheticTSDataset
+from src.data import (
+    RealShapeScaledDataset,
+    RealVarianceBinnedDataset,
+    SyntheticTSDataset,
+)
 from src.plots import (
     gif_forecast_evolution,
     gif_nmse_convergence,
@@ -38,6 +42,7 @@ SETUP_LABELS = ["normalized", "original", "original_equalvar", "original_gradmat
 DATASETS = {
     "synthetic": SyntheticTSDataset,
     "real_shape_scaled": RealShapeScaledDataset,
+    "real_variance_binned": RealVarianceBinnedDataset,
 }
 
 

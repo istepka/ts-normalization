@@ -66,3 +66,60 @@ sbatch --job-name=loss_space_realshape scripts/run.sbatch \
 The local SSTC arrays use key `data`. Some real datasets contain flat windows; the loader
 filters non-finite or zero-context-std base windows before normalization and fails if none
 remain.
+
+## Implemented second: variance-binned real windows
+
+Config switch: `data.kind=real_variance_binned`.
+
+This mode loads natural real windows from the same `.npz` format, filters non-finite and
+zero-context-std windows, splits train/validation with `VAL_SEED`, then bins windows by
+training-set context standard deviation quantiles. With three configured categories, the
+bins are named `low_var`, `mid_var`, and `high_var`.
+
+Unlike the real-shape controlled-scale setup, this does **not** copy the same shape across
+scales. It keeps natural real windows in their natural scale bins, so source difficulty and
+variance are mixed. This is the realistic-but-noisier check.
+
+The `original_equalvar` control keeps the same bin membership but context-normalizes every
+window to unit scale. If the original-space spread collapses in that control, the spread is
+more plausibly about scale rather than bin-specific shape difficulty.
+
+Concrete local run using the SSTC electricity windows:
+
+```sh
+sbatch --job-name=loss_space_varbins scripts/run.sbatch \
+  wandb.experiment=real_variance_bins_electricity_30k_sgd \
+  data.kind=real_variance_binned \
+  data.real_shape_path=/zfsauton2/home/istepka/sstc/experiments/h1/data/128_electricity.npz \
+  data.real_shape_key=data \
+  data.real_value_scale=0.0001
+```
+
+The raw electricity windows have a very wide context-std range (roughly `0.5` to `6.4e4`).
+At `real_value_scale=1.0`, original-space SGD diverges immediately; `0.0001` preserves the
+relative variance-bin ordering while keeping the absolute original-space loss scale finite
+in a 100-step smoke test.
+
+## Eight-dataset variance-bin robustness rerun
+
+The Electricity-only run used a random split after creating overlapping windows. For raw
+`[N, T]` arrays, the corrected loader now splits source-series rows first and only then
+extracts sliding windows. This prevents train and validation windows from sharing nearly
+all of their observations.
+
+The robustness rerun repeats the variance-bin experiment independently on eight datasets:
+Electricity, Traffic, Solar 10 Minutes, Taxi 30 Minutes, Wind Farms, Pedestrian Counts,
+KDD Cup 2018, and FRED-MD. Quantile bins are computed separately from each dataset's
+training windows. The training-only p99 context standard deviation is scaled to
+`0.6475868966` for every dataset, matching the stable Electricity configuration while
+preserving each dataset's internal low/mid/high variance ratios.
+
+Seeds are averaged within each dataset first. Plots and endpoint summaries then report the
+mean and 95% Student-t confidence interval across the eight dataset-level results, so large
+datasets do not receive more inferential weight simply because they contain more windows.
+This tests whether the Electricity finding is robust across domains; it does not by itself
+remove the variance--forecast-difficulty confound.
+
+The single job `scripts/run_variance_bins_8datasets.sbatch` runs all eight datasets
+sequentially and invokes `scripts/aggregate_variance_bins.py` to produce the
+cross-dataset plots and numerical summary.

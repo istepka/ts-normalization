@@ -7,13 +7,14 @@ device: cpu
 output_dir: outputs/loss_space_toy
 
 data:
-  kind: synthetic # synthetic | real_shape_scaled
-  # Real-shape controlled-scale input. Used only with
-  # `data.kind=real_shape_scaled`; the npz array is either precomputed windows
+  kind: synthetic # synthetic | real_shape_scaled | real_variance_binned
+  # Real-data input. Used with `data.kind=real_shape_scaled` and
+  # `data.kind=real_variance_binned`; the npz array is either precomputed windows
   # [N, context+horizon] or raw series [N, T] / [T].
   real_shape_path: data/real_shape_windows.npz
   real_shape_key: windows
   real_shape_val_fraction: 0.2
+  real_value_scale: 1.0 # global multiplier for real-data windows
   # Distinct learnable patterns (different freq/phase) so categories are NOT
   # identical after instance normalization, sharing the same mean but living
   # on different variance scales (variance is purely amplitude-driven).
