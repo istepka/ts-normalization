@@ -36,7 +36,7 @@ low-σ categories lag. Normalized-space loss removes this.
   → `*_linear_{200,500,2000}.png`, screen dir), since most convergence is in the first ~1k.
 - Qualitative forecasts snapshotted on a non-uniform schedule (every 200 steps to 1k,
   every 1k to 10k, every 10k after); the static evolution figure shows the fixed columns
-  `forecast_columns: [0, 100, 200, 500, 1000, 30000]` to visualize the disparate *rate*.
+  `forecast_columns: [0, 10, 50, 100, 500, 30000]` to visualize the disparate *rate*.
 - W&B: runs grouped per setup as `{experiment}/{label}` (all 5 seeds in one group),
   tagged with `experiment / label / loss-mode / seed` (bump `wandb.experiment` to start a
   clean regeneration batch). Figures saved as both `.png` (preview) and `.pdf` (paper).
@@ -185,7 +185,7 @@ For contrast, the normalized-space-trained model serves all three categories eve
 ![forecasts normalized](../outputs/12638_loss_space_toy/forecasts_normalized.png)
 
 **Forecast evolution — `forecast_evolution_original.png`.** Small-multiples grid (rows =
-category, columns = selected training steps `[0, 100, 200, 500, 1000, 30000]`); each cell
+category, columns = selected training steps `[0, 10, 50, 100, 500, 30000]`); each cell
 zooms into the forecast — target (black) vs prediction (red). Read *down* an early column:
 by step ~200 `var10`/`var100` already match the target while `var1` is still far off — the
 disparate rate in one glance. Read *across* a row to see that category converge.

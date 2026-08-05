@@ -18,9 +18,9 @@ from pathlib import Path
 import hydra
 import numpy as np
 import torch
-import wandb
 from omegaconf import DictConfig, OmegaConf
 
+import wandb
 from src.captions import write_captions
 from src.data import (
     RealScaleSwapDataset,
@@ -35,11 +35,14 @@ from src.plots import (
     plot_global_nmse,
     plot_grad_magnitude,
     plot_nmse_panels,
+    plot_nmse_subfigures,
     plot_qualitative,
 )
 from src.train import Trainer
 
 SETUP_LABELS = ["normalized", "original", "original_equalvar", "original_gradmatch"]
+LR_ADJUSTED_LABEL = "original_lr_adjusted"
+AVAILABLE_SETUP_LABELS = SETUP_LABELS + [LR_ADJUSTED_LABEL]
 DATASETS = {
     "synthetic": SyntheticTSDataset,
     "real_shape_scaled": RealShapeScaledDataset,
@@ -61,19 +64,20 @@ def build_run_specs(cfg: DictConfig, seed: int) -> list[tuple[str, DictConfig, s
     base = variant()
     equalvar = variant(**{"data.equal_variance": True})
     gradmatch = variant(**{"train.grad_norm_match": True})
+    lr_adjusted = variant(**{"train.lr": cfg.train.lr_adjusted})
     specs = {
         "normalized": ("normalized", base, "normalized"),
         "original": ("original", base, "original"),
         "original_equalvar": ("original_equalvar", equalvar, "original"),
         "original_gradmatch": ("original_gradmatch", gradmatch, "original"),
+        LR_ADJUSTED_LABEL: (LR_ADJUSTED_LABEL, lr_adjusted, "original"),
     }
     setup_labels = list(cfg.setups)
-    supported = [SETUP_LABELS[:2], SETUP_LABELS]
-    if setup_labels not in supported:
-        raise ValueError(
-            "setups must be the normalized/original pair, optionally followed "
-            "by both controls"
-        )
+    if not setup_labels or len(set(setup_labels)) != len(setup_labels):
+        raise ValueError("setups must contain unique setup labels")
+    unknown = set(setup_labels) - set(AVAILABLE_SETUP_LABELS)
+    if unknown:
+        raise ValueError(f"unknown setups: {sorted(unknown)}")
     return [specs[label] for label in setup_labels]
 
 
@@ -92,12 +96,14 @@ def verification_summary(results: dict, names: list[str]) -> dict:
             "final_global_nmse": float(final_global.mean()),
         }
     # Step-0 gradient ratio: the b^2 = sigma^2 scaling is exact at init.
-    grad = np.array([h["grad_mag"][0] for h in results["original"]["histories"]]).mean(
-        axis=0
-    )
-    summary["original"]["init_grad_ratio_to_smallest"] = {
-        n: float(v / grad.min()) for n, v in zip(names, grad)
-    }
+    for label in ("original", LR_ADJUSTED_LABEL):
+        if label in results:
+            grad = np.array(
+                [h["grad_mag"][0] for h in results[label]["histories"]]
+            ).mean(axis=0)
+            summary[label]["init_grad_ratio_to_smallest"] = {
+                n: float(v / grad.min()) for n, v in zip(names, grad)
+            }
     return summary
 
 
@@ -135,7 +141,7 @@ def main(cfg: DictConfig):
             results[label]["model"] = trainer.model  # last seed, for qualitative
             results[label]["dataset"] = dataset
 
-    names = results["normalized"]["dataset"].category_names
+    names = results[setup_labels[0]]["dataset"].category_names
 
     # Write metrics + forecast snapshot data before plotting, so a plotting hiccup
     # never wastes a full run and figures can be restyled later without retraining
@@ -143,7 +149,9 @@ def main(cfg: DictConfig):
     summary = verification_summary(results, names)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
-    for label in ("normalized", "original"):
+    for label in ("normalized", "original", LR_ADJUSTED_LABEL):
+        if label not in results:
+            continue
         h = results[label]["histories"][-1]
         np.savez(
             out_dir / f"forecast_data_{label}.npz",
@@ -216,6 +224,21 @@ def render_figures(cfg, results, names, out_dir: Path):
                 paper,
             )
     write_captions(paper_dir)
+
+    plot_nmse_subfigures(
+        results,
+        names,
+        band,
+        out_dir,
+        paper=False,
+    )
+    plot_nmse_subfigures(
+        results,
+        names,
+        band,
+        paper_dir,
+        paper=True,
+    )
 
     # Linear-scale companions (screen dir only), one per zoom window over the first N
     # steps where essentially all convergence happens (the full range crushes it flat).

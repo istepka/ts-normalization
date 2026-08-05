@@ -17,6 +17,8 @@ model:
 train:
   batch_size: 32
   lr: 1.0e-4
+  # Divide by mean b^2 = (4 * 1 + 4 * 100) / 8 = 50.5.
+  lr_adjusted: 1.9801980198e-6
 
 plot:
   render: false

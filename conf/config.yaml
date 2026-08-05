@@ -85,6 +85,7 @@ train:
   optimizer: sgd # sgd exposes the raw b^2=sigma^2 gradient weighting; adam's
   # per-coordinate RMS normalization divides out the global magnitude inflation
   lr: 1.0e-3
+  lr_adjusted: 1.0e-3 # explicit alternative used only by selected setups
   # Non-uniform eval cadence for the scalar metric curves (nMSE, grad mag): dense at
   # the start where convergence happens, sparse later. Same {until, every} segment
   # format as forecast_schedule; the final step is always included.
@@ -104,7 +105,7 @@ train:
     - {until: 1000000, every: 10000}
   # Columns shown in the static forecast-evolution figure (also force-captured as
   # snapshots). Values past the final step map to the final snapshot.
-  forecast_columns: [0, 100, 200, 500, 1000, 30000]
+  forecast_columns: [0, 10, 50, 100, 500, 30000]
 
 plot:
   render: true

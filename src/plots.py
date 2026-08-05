@@ -15,9 +15,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib.animation import FuncAnimation, PillowWriter
-
+from matplotlib.lines import Line2D
 
 GLOBAL_STYLE = {"color": "0.35", "linestyle": "--", "linewidth": 1.6}
+DISPLAY_LABELS = {
+    "normalized": "Normalized-space",
+    "original": "Original-space",
+    "original_equalvar": "Equal variance",
+    "original_gradmatch": "Gradient-norm matched",
+}
+
+
+def _hide_top_right_spines(ax):
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
 
 
 def _save(fig, out_path: Path, paper: bool = False):
@@ -88,6 +99,7 @@ def _nmse_curve(
         ax.set_title(title)
     if show_legend:
         ax.legend()
+    _hide_top_right_spines(ax)
 
 
 def plot_nmse_panels(
@@ -114,17 +126,72 @@ def plot_nmse_panels(
     _save(fig, out_path, paper)
 
 
+def plot_nmse_subfigures(results, names, band, out_dir, paper=False):
+    """Compact core-and-control panels plus a separate shared legend."""
+    panels = (
+        ("normalized", "normalized", (0, 500), True, False),
+        ("original", "original", (0, 500), False, False),
+        ("original_equalvar", "equalvar", (0, 2000), True, True),
+        (
+            "original_gradmatch",
+            "gradmatch",
+            (0, 2000),
+            False,
+            True,
+        ),
+    )
+    legend_handles = None
+    legend_labels = None
+    for label, filename, xlim, show_ylabel, show_xlabel in panels:
+        fig, ax = plt.subplots(figsize=(3.8, 1.75))
+        _nmse_curve(
+            ax,
+            results[label]["histories"],
+            names,
+            band,
+            title=None,
+            show_ylabel=show_ylabel,
+            show_legend=False,
+            yscale="linear",
+            xlim=xlim,
+        )
+        if not show_ylabel:
+            ax.tick_params(axis="y", labelleft=False)
+        if not show_xlabel:
+            ax.set_xlabel("")
+        legend_handles, legend_labels = ax.get_legend_handles_labels()
+        fig.tight_layout()
+        _save(fig, out_dir / f"nmse_{filename}.png", paper)
+
+    fig = plt.figure(figsize=(6.0, 0.32))
+    fig.legend(
+        legend_handles,
+        legend_labels,
+        loc="center",
+        ncol=4,
+        frameon=False,
+    )
+    _save(fig, out_dir / "nmse_shared_legend.png", paper)
+
+
 def plot_global_nmse(
-    results, labels, band, out_path, paper=False, yscale="log", xlim=None
+    results,
+    labels,
+    band,
+    out_path,
+    paper=False,
+    yscale="log",
+    xlim=None,
+    show_legend=True,
 ):
     """Global nMSE (averaged over all categories) vs step, mean +/- 1 band per setup."""
     space = "linear" if yscale == "linear" else "log"
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    fig, ax = plt.subplots(figsize=(6.5, 3.5))
     for label in labels:
         steps, mean, lo, hi = _mean_band(
             results[label]["histories"], "global_nmse", band, space
         )
-        (line,) = ax.plot(steps, mean, label=label)
+        (line,) = ax.plot(steps, mean, label=DISPLAY_LABELS[label])
         ax.fill_between(
             steps,
             lo,
@@ -140,23 +207,54 @@ def plot_global_nmse(
     ax.set_ylabel("global nMSE")
     if not paper:
         ax.set_title("Global convergence")
-    ax.legend()
-    fig.tight_layout()
+    if show_legend:
+        fig.legend(
+            *ax.get_legend_handles_labels(),
+            loc="center right",
+            bbox_to_anchor=(0.99, 0.5),
+            ncol=1,
+            frameon=False,
+        )
+    _hide_top_right_spines(ax)
+    right = 0.68 if show_legend else 1.0
+    fig.tight_layout(rect=(0.0, 0.0, right, 1.0))
     _save(fig, out_path, paper)
 
 
-def plot_grad_magnitude(results, names, band, out_path, paper=False, yscale="log"):
+def plot_grad_magnitude(
+    results,
+    names,
+    band,
+    out_path,
+    paper=False,
+    yscale="log",
+    show_legend=True,
+):
     """Per-category gradient magnitude at init (step 0), where the b^2 = sigma^2
     scaling of the original-space gradient is exact. Bars are mean +/- 1 band."""
-    fig, ax = plt.subplots(figsize=(6, 4.5))
+    fig, ax = plt.subplots(figsize=(6, 3.5))
     x = np.arange(len(names))
-    width = 0.38
-    for offset, label in zip((-width / 2, width / 2), ("normalized", "original")):
+    labels = (
+        "normalized",
+        "original",
+        "original_equalvar",
+        "original_gradmatch",
+    )
+    width = 0.18
+    offsets = (np.arange(len(labels)) - (len(labels) - 1) / 2) * width
+    for offset, label in zip(offsets, labels):
         grads = np.array([h["grad_mag"][0] for h in results[label]["histories"]])
         mean = grads.mean(axis=0)
         std = grads.std(axis=0, ddof=1)
         half = std if band == "std" else std / np.sqrt(grads.shape[0])
-        ax.bar(x + offset, mean, width, yerr=half, capsize=3, label=label)
+        ax.bar(
+            x + offset,
+            mean,
+            width,
+            yerr=half,
+            capsize=3,
+            label=DISPLAY_LABELS[label],
+        )
     ax.set_yscale(yscale)
     ax.set_xticks(x)
     ax.set_xticklabels(names)
@@ -164,8 +262,34 @@ def plot_grad_magnitude(results, names, band, out_path, paper=False, yscale="log
     ax.set_ylabel(r"$\|\partial \mathcal{L}/\partial \hat z\|$")
     if not paper:
         ax.set_title("Per-category gradient magnitude near init")
-    ax.legend()
-    fig.tight_layout()
+    if show_legend:
+        fig.legend(
+            *ax.get_legend_handles_labels(),
+            loc="center right",
+            bbox_to_anchor=(0.99, 0.5),
+            ncol=1,
+            frameon=False,
+        )
+    _hide_top_right_spines(ax)
+    right = 0.67 if show_legend else 1.0
+    fig.tight_layout(rect=(0.0, 0.0, right, 1.0))
+    _save(fig, out_path, paper)
+
+
+def plot_setup_legend(out_path, paper=False):
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    handles = [
+        Line2D([0], [0], color=colors[index], linewidth=2)
+        for index in range(len(DISPLAY_LABELS))
+    ]
+    fig = plt.figure(figsize=(6.5, 0.35))
+    fig.legend(
+        handles,
+        DISPLAY_LABELS.values(),
+        loc="center",
+        ncol=4,
+        frameon=False,
+    )
     _save(fig, out_path, paper)
 
 
@@ -220,6 +344,7 @@ def plot_forecast_evolution(history, names, title, columns, out_path, paper=Fals
             ax.set_ylim(lo - pad, hi + pad)
             ax.set_xticks([])
             ax.set_yticks([])
+            _hide_top_right_spines(ax)
             if r == 0:
                 ax.set_title(
                     f"step {_fmt_step(label_step)}", fontsize=15, fontweight="bold"

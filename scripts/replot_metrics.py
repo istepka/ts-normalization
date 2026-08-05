@@ -12,7 +12,13 @@ from pathlib import Path
 
 import numpy as np
 
-from src.plots import plot_global_nmse, plot_grad_magnitude, plot_nmse_panels
+from src.plots import (
+    plot_global_nmse,
+    plot_grad_magnitude,
+    plot_nmse_panels,
+    plot_nmse_subfigures,
+    plot_setup_legend,
+)
 
 SETUP_LABELS = ["normalized", "original", "original_equalvar", "original_gradmatch"]
 
@@ -80,4 +86,33 @@ plot_grad_magnitude(results, names, band, out_dir / "grad_magnitude.png")
 plot_grad_magnitude(
     results, names, band, out_dir / "grad_magnitude_linear.png", yscale="linear"
 )
+plot_nmse_subfigures(results, names, band, out_dir)
+paper_dir = out_dir.parent / f"{out_dir.name}_paper"
+paper_dir.mkdir(parents=True, exist_ok=True)
+plot_nmse_subfigures(
+    results,
+    names,
+    band,
+    paper_dir,
+    paper=True,
+)
+plot_global_nmse(
+    results,
+    SETUP_LABELS,
+    band,
+    paper_dir / "nmse_global_linear_2000.png",
+    paper=True,
+    yscale="linear",
+    xlim=(0, 2000),
+    show_legend=False,
+)
+plot_grad_magnitude(
+    results,
+    names,
+    band,
+    paper_dir / "grad_magnitude.png",
+    paper=True,
+    show_legend=False,
+)
+plot_setup_legend(paper_dir / "setup_shared_legend.png", paper=True)
 print(f"replotted nMSE figures in {out_dir} (linear zooms {zoom_windows})")
