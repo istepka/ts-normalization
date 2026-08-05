@@ -122,7 +122,9 @@ def plot_nmse_panels(
     save_figure(fig, output_path)
 
 
-def plot_gradients(datasets: list[dict], names: list[str], output_path: Path):
+def plot_gradients(
+    datasets: list[dict], names: list[str], output_path: Path, yscale: str = "log"
+):
     fig, ax = plt.subplots(figsize=(6, 4.5))
     x = np.arange(len(names))
     width = 0.38
@@ -138,12 +140,14 @@ def plot_gradients(datasets: list[dict], names: list[str], output_path: Path):
             capsize=3,
             label=label,
         )
-    ax.set_yscale("log")
+    ax.set_yscale(yscale)
+    if yscale == "linear":
+        ax.set_ylim(bottom=0.0)
     ax.set_xticks(x)
     ax.set_xticklabels(names)
     ax.set_xlabel("within-dataset context-variance bin")
     ax.set_ylabel(r"$\|\partial \mathcal{L}/\partial \hat z\|$")
-    ax.set_title("Initialization gradients across datasets")
+    ax.set_title(f"Initialization gradients across datasets ({yscale} scale)")
     ax.legend()
     save_figure(fig, output_path)
 
@@ -208,6 +212,12 @@ def main():
         args.output_dir / "nmse_controls_dataset_ci.png",
     )
     plot_gradients(datasets, names, args.output_dir / "grad_magnitude_dataset_ci.png")
+    plot_gradients(
+        datasets,
+        names,
+        args.output_dir / "grad_magnitude_dataset_ci_linear.png",
+        yscale="linear",
+    )
     summary = build_summary(datasets, names)
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))

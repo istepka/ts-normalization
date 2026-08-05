@@ -48,7 +48,7 @@ for index in "${!datasets[@]}"; do
   uv run python main.py \
     device=cuda \
     "output_dir=${run_dir}" \
-    "wandb.experiment=real_variance_bins_8datasets_${dataset}_splitfix" \
+    "wandb.experiment=varbins8_${dataset}_splitfix" \
     data.kind=real_variance_binned \
     "data.real_shape_path=${data_root}/128_${dataset}.npz" \
     data.real_shape_key=data \
