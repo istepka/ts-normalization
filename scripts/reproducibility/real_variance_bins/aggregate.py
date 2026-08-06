@@ -3,6 +3,9 @@
 Each input is dataset_name=output_dir. Seeds are averaged within a dataset
 before computing means and 95% Student-t confidence intervals across the eight
 datasets, which are the independent statistical units.
+
+Paper: apd_loss_space_real_variance.tex, Table loss-space-real-variance and
+Table loss-space-real-variance-eight-dataset.
 """
 
 import argparse
