@@ -1,0 +1,174 @@
+# Dataset -> domain assignment for the GiftEvalPretrain corpus.
+#
+# The corpus's arrow files carry no per-dataset domain field (only item_id,
+# start, freq, target per series), and no authoritative public per-directory
+# domain table was found for GiftEvalPretrain specifically. The dataset card
+# states the corpus spans "seven domains" aligned with GIFT-Eval; the exact
+# seven-label taxonomy (Econ/Fin, Energy, Healthcare, Nature, Sales,
+# Transport, Web/CloudOps) is confirmed by GIFT-Eval's own
+# notebooks/dataset_properties.json for its 28 benchmark configs.
+#
+# This file assigns each of the 152 GiftEvalPretrain directories to one of
+# those seven domains by dataset identity (source competition/archive/sensor
+# network). Most assignments are unambiguous (e.g. PEMS03 -> Transport,
+# era5_* -> Nature). A handful are genuinely uncertain from the name alone
+# and are marked confidence: low; gifteval_corpus.py surfaces these in the
+# audit output rather than silently trusting them. Frequency is NOT recorded
+# here -- it is read per-series from the arrow data itself.
+#
+# gifteval_corpus.py fails loudly if a local dataset directory has no entry
+# here (no silent default domain).
+
+datasets:
+  alibaba_cluster_trace_2018: {domain: Web/CloudOps, confidence: high}
+  australian_electricity_demand: {domain: Energy, confidence: high}
+  azure_vm_traces_2017: {domain: Web/CloudOps, confidence: high}
+  bdg-2_bear: {domain: Energy, confidence: high}
+  bdg-2_fox: {domain: Energy, confidence: high}
+  bdg-2_panther: {domain: Energy, confidence: high}
+  bdg-2_rat: {domain: Energy, confidence: high}
+  beijing_air_quality: {domain: Nature, confidence: high}
+  BEIJING_SUBWAY_30MIN: {domain: Transport, confidence: high}
+  bitcoin_with_missing: {domain: Econ/Fin, confidence: high}
+  borealis: {domain: Energy, confidence: low}
+  borg_cluster_data_2011: {domain: Web/CloudOps, confidence: high}
+  buildings_900k: {domain: Energy, confidence: high}
+  bull: {domain: Econ/Fin, confidence: low}
+  cdc_fluview_ilinet: {domain: Healthcare, confidence: high}
+  cdc_fluview_who_nrevss: {domain: Healthcare, confidence: high}
+  china_air_quality: {domain: Nature, confidence: high}
+  cif_2016_12: {domain: Econ/Fin, confidence: high}
+  cif_2016_6: {domain: Econ/Fin, confidence: high}
+  cmip6_1850: {domain: Nature, confidence: high}
+  cmip6_1855: {domain: Nature, confidence: high}
+  cmip6_1860: {domain: Nature, confidence: high}
+  cmip6_1865: {domain: Nature, confidence: high}
+  cmip6_1870: {domain: Nature, confidence: high}
+  cmip6_1875: {domain: Nature, confidence: high}
+  cmip6_1880: {domain: Nature, confidence: high}
+  cmip6_1885: {domain: Nature, confidence: high}
+  cmip6_1890: {domain: Nature, confidence: high}
+  cmip6_1895: {domain: Nature, confidence: high}
+  cmip6_1900: {domain: Nature, confidence: high}
+  cmip6_1905: {domain: Nature, confidence: high}
+  cmip6_1910: {domain: Nature, confidence: high}
+  cmip6_1915: {domain: Nature, confidence: high}
+  cmip6_1920: {domain: Nature, confidence: high}
+  cmip6_1925: {domain: Nature, confidence: high}
+  cmip6_1930: {domain: Nature, confidence: high}
+  cmip6_1935: {domain: Nature, confidence: high}
+  cmip6_1940: {domain: Nature, confidence: high}
+  cmip6_1945: {domain: Nature, confidence: high}
+  cmip6_1950: {domain: Nature, confidence: high}
+  cmip6_1955: {domain: Nature, confidence: high}
+  cmip6_1960: {domain: Nature, confidence: high}
+  cmip6_1965: {domain: Nature, confidence: high}
+  cmip6_1970: {domain: Nature, confidence: high}
+  cmip6_1975: {domain: Nature, confidence: high}
+  cmip6_1980: {domain: Nature, confidence: high}
+  cmip6_1985: {domain: Nature, confidence: high}
+  cmip6_1990: {domain: Nature, confidence: high}
+  cmip6_1995: {domain: Nature, confidence: high}
+  cmip6_2000: {domain: Nature, confidence: high}
+  cmip6_2005: {domain: Nature, confidence: high}
+  cmip6_2010: {domain: Nature, confidence: high}
+  cockatoo: {domain: Energy, confidence: low}
+  covid19_energy: {domain: Energy, confidence: high}
+  covid_mobility: {domain: Healthcare, confidence: medium}
+  elecdemand: {domain: Energy, confidence: high}
+  elf: {domain: Energy, confidence: high}
+  era5_1989: {domain: Nature, confidence: high}
+  era5_1990: {domain: Nature, confidence: high}
+  era5_1991: {domain: Nature, confidence: high}
+  era5_1992: {domain: Nature, confidence: high}
+  era5_1993: {domain: Nature, confidence: high}
+  era5_1994: {domain: Nature, confidence: high}
+  era5_1995: {domain: Nature, confidence: high}
+  era5_1996: {domain: Nature, confidence: high}
+  era5_1997: {domain: Nature, confidence: high}
+  era5_1998: {domain: Nature, confidence: high}
+  era5_1999: {domain: Nature, confidence: high}
+  era5_2000: {domain: Nature, confidence: high}
+  era5_2001: {domain: Nature, confidence: high}
+  era5_2002: {domain: Nature, confidence: high}
+  era5_2003: {domain: Nature, confidence: high}
+  era5_2004: {domain: Nature, confidence: high}
+  era5_2005: {domain: Nature, confidence: high}
+  era5_2006: {domain: Nature, confidence: high}
+  era5_2007: {domain: Nature, confidence: high}
+  era5_2008: {domain: Nature, confidence: high}
+  era5_2009: {domain: Nature, confidence: high}
+  era5_2010: {domain: Nature, confidence: high}
+  era5_2011: {domain: Nature, confidence: high}
+  era5_2012: {domain: Nature, confidence: high}
+  era5_2013: {domain: Nature, confidence: high}
+  era5_2014: {domain: Nature, confidence: high}
+  era5_2015: {domain: Nature, confidence: high}
+  era5_2016: {domain: Nature, confidence: high}
+  era5_2017: {domain: Nature, confidence: high}
+  era5_2018: {domain: Nature, confidence: high}
+  extended_web_traffic_with_missing: {domain: Web/CloudOps, confidence: high}
+  favorita_sales: {domain: Sales, confidence: high}
+  favorita_transactions: {domain: Sales, confidence: high}
+  fred_md: {domain: Econ/Fin, confidence: high}
+  gfc12_load: {domain: Energy, confidence: high}
+  gfc14_load: {domain: Energy, confidence: high}
+  gfc17_load: {domain: Energy, confidence: high}
+  godaddy: {domain: Econ/Fin, confidence: medium}
+  hog: {domain: Econ/Fin, confidence: low}
+  HZMETRO: {domain: Transport, confidence: high}
+  ideal: {domain: Energy, confidence: high}
+  kaggle_web_traffic_weekly: {domain: Web/CloudOps, confidence: high}
+  kdd2022: {domain: Energy, confidence: medium}
+  largest_2017: {domain: Transport, confidence: medium}
+  largest_2018: {domain: Transport, confidence: medium}
+  largest_2019: {domain: Transport, confidence: medium}
+  largest_2020: {domain: Transport, confidence: medium}
+  largest_2021: {domain: Transport, confidence: medium}
+  lcl: {domain: Energy, confidence: high}
+  london_smart_meters_with_missing: {domain: Energy, confidence: high}
+  LOS_LOOP: {domain: Transport, confidence: high}
+  m1_monthly: {domain: Econ/Fin, confidence: medium}
+  m1_quarterly: {domain: Econ/Fin, confidence: medium}
+  m1_yearly: {domain: Econ/Fin, confidence: medium}
+  m5: {domain: Sales, confidence: high}
+  monash_m3_monthly: {domain: Econ/Fin, confidence: medium}
+  monash_m3_other: {domain: Econ/Fin, confidence: medium}
+  monash_m3_quarterly: {domain: Econ/Fin, confidence: medium}
+  monash_m3_yearly: {domain: Econ/Fin, confidence: medium}
+  nn5_daily_with_missing: {domain: Econ/Fin, confidence: high}
+  nn5_weekly: {domain: Econ/Fin, confidence: high}
+  oikolab_weather: {domain: Nature, confidence: high}
+  pdb: {domain: Econ/Fin, confidence: low}
+  pedestrian_counts: {domain: Transport, confidence: high}
+  PEMS03: {domain: Transport, confidence: high}
+  PEMS04: {domain: Transport, confidence: high}
+  PEMS07: {domain: Transport, confidence: high}
+  PEMS08: {domain: Transport, confidence: high}
+  PEMS_BAY: {domain: Transport, confidence: high}
+  project_tycho: {domain: Healthcare, confidence: high}
+  Q-TRAFFIC: {domain: Transport, confidence: high}
+  residential_load_power: {domain: Energy, confidence: high}
+  residential_pv_power: {domain: Energy, confidence: high}
+  rideshare_with_missing: {domain: Transport, confidence: high}
+  sceaux: {domain: Energy, confidence: low}
+  SHMETRO: {domain: Transport, confidence: high}
+  smart: {domain: Energy, confidence: low}
+  solar_power: {domain: Energy, confidence: high}
+  spain: {domain: Energy, confidence: low}
+  subseasonal: {domain: Nature, confidence: high}
+  subseasonal_precip: {domain: Nature, confidence: high}
+  sunspot_with_missing: {domain: Nature, confidence: high}
+  taxi_30min: {domain: Transport, confidence: high}
+  tourism_monthly: {domain: Econ/Fin, confidence: medium}
+  tourism_quarterly: {domain: Econ/Fin, confidence: medium}
+  tourism_yearly: {domain: Econ/Fin, confidence: medium}
+  traffic_hourly: {domain: Transport, confidence: high}
+  traffic_weekly: {domain: Transport, confidence: high}
+  uber_tlc_daily: {domain: Transport, confidence: high}
+  uber_tlc_hourly: {domain: Transport, confidence: high}
+  vehicle_trips_with_missing: {domain: Transport, confidence: high}
+  weather: {domain: Nature, confidence: high}
+  wiki-rolling_nips: {domain: Web/CloudOps, confidence: high}
+  wind_farms_with_missing: {domain: Energy, confidence: high}
+  wind_power: {domain: Energy, confidence: high}

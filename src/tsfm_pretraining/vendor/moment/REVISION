@@ -1,0 +1,36 @@
+source_repo: https://github.com/moment-timeseries-foundation-model/moment
+pinned_commit: 38f7310ad594100747ca2a8357e9c7ca7d323e0e
+license: MIT (Copyright 2024 Auton Lab, Carnegie Mellon University)
+vendored_files:
+  - momentfm/common.py
+  - momentfm/models/moment.py
+  - momentfm/models/layers/embed.py
+  - momentfm/models/layers/revin.py
+  - momentfm/utils/masking.py
+  - momentfm/utils/utils.py
+  - momentfm/data/base.py
+notes: >
+  Vendored instead of pip-installed because momentfm's published pins
+  (numpy==1.25.2, transformers==4.33.3, huggingface-hub==0.24.0) conflict with
+  this project's dependencies. Import paths were rewritten (momentfm.* ->
+  relative imports within this package). Not used for its published
+  pretrained checkpoints; this project trains MOMENT from a random
+  initialization on GiftEvalPretrain.
+
+  Two intentional deviations from upstream models/moment.py, both scoped to
+  models/moment.py only (all other vendored files are byte-for-byte copies):
+
+  1. Dropped the forecast/classify/detect_anomalies/reconstruct/
+     short_forecast methods and the embed.py DataEmbedding/TokenEmbedding/
+     TemporalEmbedding classes they depend on, since this project only uses
+     the reconstruction (masked pretraining) and embed tasks. Unused
+     surface area, not a behavior change to what remains.
+  2. reconstruction() now also returns, via TimeseriesOutputs.metadata, the
+     pre-denorm normalized decoder output and the RevIN mean/stdev buffers
+     used for that forward pass. Upstream only returns the denormalized
+     (original-space) reconstruction. moment_adapter.py needs the
+     normalized-space prediction to compute the moment_normalized loss
+     condition without re-deriving RevIN statistics or duplicating the
+     forward pass; this is a strict addition to the return value, the
+     forward computation itself (normalize -> patch -> encode -> head ->
+     denormalize) is unchanged.

@@ -5,13 +5,28 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "datasets>=3.0.0",
     "hydra-core>=1.3.3",
     "ipykernel>=7.3.0",
     "ipywidgets>=8.1.8",
     "matplotlib>=3.10.9",
     "numpy>=2.4.6",
     "pandas>=3.0.3",
+    "pyarrow>=17.0.0",
     "scipy>=1.18.0",
     "torch>=2.12.0",
+    "transformers>=4.45.0",
     "wandb>=0.27.2",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.ruff]
+# Vendored third-party source (src/tsfm_pretraining/vendor/) is pinned to a
+# specific upstream commit and must stay byte-for-byte reproducible against
+# that commit (see each vendor subdir's REVISION file); exclude it from
+# formatting/linting so tooling never mechanically drifts it from upstream.
+extend-exclude = ["src/tsfm_pretraining/vendor"]

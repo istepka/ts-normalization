@@ -1,0 +1,51 @@
+# TimesFM-1.0 (reduced config) forecasting pretraining on GiftEvalPretrain,
+# loss-space comparison. See notes/05-timesfm-pretraining-loss-space-plan.md.
+# Single source of truth; code accesses keys directly and fails if any is
+# missing.
+
+model: timesfm
+device: cpu # cpu | cuda
+condition: timesfm_native_original # timesfm_native_original | timesfm_normalized
+experiment_kind: natural_mixture # natural_mixture | controlled_scale
+scale_assignment: null # A | B, required when experiment_kind=controlled_scale
+scale_b_low: 1.0
+scale_b_high: 10.0
+
+seed: 0
+output_dir: outputs/tsfm_pretraining/timesfm
+
+corpus:
+  root: /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full
+  datasets: null # null = every univariate dataset found under corpus.root
+
+window_index:
+  context_length: 512 # 16 patches of patch_len=32
+  prediction_length: 128 # must equal the TimesFM config's horizon_len
+  stride: 512
+  val_series_fraction: 0.1
+  min_valid_fraction: 0.9
+  base_seed: 0
+  max_windows_per_series: null
+  cache_path: null # if set, load/save the built index here instead of rebuilding
+
+dataset_weights: null # null = uniform over datasets present in the index
+
+timesfm:
+  config_size: 17m # 17m (smoke test) | 70m (primary run)
+  grad_clip_norm: 1.0
+
+train:
+  steps: 2000
+  batch_size: 32
+  lr: 1.0e-4
+  optimizer: adamw
+  schedule_seed: 0
+  eval_every: 100
+  eval_batches: 4
+  checkpoint_every: 500
+
+wandb:
+  entity: ts-normalization
+  project: tsfm_pretraining
+  mode: online
+  experiment: gifteval_timesfm

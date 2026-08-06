@@ -1,0 +1,21 @@
+source_repo: https://github.com/google-research/timesfm
+path: v1/src/timesfm/pytorch_patched_decoder.py
+pinned_commit: 705685c9122eeecc53e57285e44598c3453acb60
+license: Apache License 2.0 (Copyright 2024 Google LLC)
+vendored_files:
+  - pytorch_patched_decoder.py (byte-for-byte copy, no modifications)
+notes: >
+  This is Google's own official PyTorch port of the legacy TimesFM-1.0
+  architecture (decoder-only, causal, input patch length 32, output patch
+  length 128, per-patch instance normalization via _forward_transform /
+  _reverse_transform, residual input/output blocks, RMSNorm transformer
+  layers, quantile + point output heads). It is not used with Google's
+  released 1.0 checkpoint weights; this project builds reduced (~17M and
+  ~70M parameter) configs of PatchedTimeSeriesDecoder / TimesFMConfig and
+  trains them from a random initialization on GiftEvalPretrain, per the
+  "reduced configuration" instruction in
+  notes/05-timesfm-pretraining-loss-space-plan.md. timesfm_model.py wraps
+  this class rather than reimplementing the architecture, so the parity test
+  (tests/test_timesfm_model.py) is a determinism/shape/causality/
+  instance-norm-invertibility check on that wrapper, not a bit-exact
+  comparison against Google's released checkpoint.

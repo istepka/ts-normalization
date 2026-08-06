@@ -1,0 +1,63 @@
+# MOMENT masked-reconstruction pretraining on GiftEvalPretrain, loss-space
+# comparison. See notes/05-timesfm-pretraining-loss-space-plan.md. Single
+# source of truth; code accesses keys directly and fails if any is missing.
+
+model: moment
+device: cpu # cpu | cuda
+condition: moment_original # moment_normalized | moment_original
+experiment_kind: natural_mixture # natural_mixture | controlled_scale
+scale_assignment: null # A | B, required when experiment_kind=controlled_scale
+scale_b_low: 1.0
+scale_b_high: 10.0
+
+seed: 0
+output_dir: outputs/tsfm_pretraining/moment
+
+corpus:
+  root: /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full
+  datasets: null # null = every univariate dataset found under corpus.root
+
+window_index:
+  context_length: 512
+  prediction_length: 128
+  stride: 512
+  val_series_fraction: 0.1
+  min_valid_fraction: 0.9
+  base_seed: 0
+  max_windows_per_series: null
+  cache_path: null # if set, load/save the built index here instead of rebuilding
+
+dataset_weights: null # null = uniform over datasets present in the index
+
+moment:
+  # MOMENT-base: matches the published flan-t5-base backbone dims (d_model,
+  # t5_num_layers, t5_num_heads, t5_d_ff, t5_d_kv below are exactly
+  # T5Config.from_pretrained("google/flan-t5-base")'s values) -> ~66M params.
+  # t5_d_kv is the actual attention head dim in T5 (independent of
+  # d_model/t5_num_heads, which need not divide evenly).
+  context_length: 512
+  patch_len: 8
+  d_model: 768
+  t5_num_layers: 12
+  t5_num_heads: 12
+  t5_d_ff: 2048
+  t5_d_kv: 64
+  mask_ratio: 0.3
+  dropout: 0.1
+  grad_clip_norm: 1.0
+
+train:
+  steps: 2000
+  batch_size: 32
+  lr: 1.0e-4
+  optimizer: adamw
+  schedule_seed: 0
+  eval_every: 100
+  eval_batches: 4
+  checkpoint_every: 500
+
+wandb:
+  entity: ts-normalization
+  project: tsfm_pretraining
+  mode: online
+  experiment: gifteval_moment
