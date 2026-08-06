@@ -5,7 +5,7 @@ from hydra import compose, initialize
 from omegaconf import OmegaConf
 
 from main import build_run_specs
-from scripts.aggregate_scale_swap import (
+from scripts.reproducibility.real_scale_swap.aggregate_crossover import (
     BASE_MODES,
     LR_ADJUSTED_MODE,
     build_summary,
@@ -17,11 +17,12 @@ from scripts.aggregate_scale_swap import (
     plot_paired_effect,
     validate_assignments,
 )
-from scripts.aggregate_scale_swap_permutations import (
+from scripts.reproducibility.real_scale_swap.aggregate_permutation_campaign import (
     holm_adjust,
     linear_auc,
+    plot_by_dataset,
 )
-from scripts.scale_swap_permutation_schedule import (
+from scripts.reproducibility.real_scale_swap.permutation_schedule import (
     HIGH_GROUPS,
     assignment_pair,
     validate_schedule,
@@ -142,6 +143,26 @@ def test_permutation_statistics_use_linear_auc_and_one_sided_pairs():
 
     adjusted = holm_adjust(np.array([0.01, 0.04, 0.03]))
     np.testing.assert_allclose(adjusted, [0.03, 0.06, 0.06])
+
+
+def test_permutation_plot_accepts_normalized_control(tmp_path):
+    names = [f"dataset_{index}" for index in range(8)]
+    steps = np.array([0, 1, 2])
+    low = np.ones((15, 8, len(steps)))
+    high = np.ones_like(low)
+    campaign = {
+        "names": names,
+        "steps": steps,
+        "low": low,
+        "high": high,
+    }
+
+    plot_by_dataset(
+        {"normalized": campaign, "original_lr_adjusted": campaign},
+        tmp_path / "comparison.png",
+    )
+
+    assert (tmp_path / "comparison.png").exists()
 
 
 def test_early_log_auc_is_lower_for_faster_curve():

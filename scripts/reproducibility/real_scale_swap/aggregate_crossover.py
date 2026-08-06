@@ -1,4 +1,9 @@
-"""Analyze the paired eight-dataset scale-swap crossover experiment."""
+"""Analyze the paired eight-dataset scale-swap crossover experiment.
+
+Paper: results.tex "Controlled scale assignment on real-world datasets"
+(Fig. loss-space-scale-swap-main) and apd_loss_space_scale_swap.tex
+(Table loss-space-scale-swap, Fig. loss-space-scale-swap-effect).
+"""
 
 import argparse
 import json

@@ -1,4 +1,8 @@
-"""Balanced complementary assignments for the scale-swap permutation campaign."""
+"""Balanced complementary assignments for the scale-swap permutation campaign.
+
+Paper: generates the 15 complementary assignment pairs behind
+apd_loss_space_scale_swap.tex "Balanced assignment".
+"""
 
 import argparse
 import itertools

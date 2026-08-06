@@ -35,7 +35,7 @@ for index in "${!labels[@]}"; do
 done
 
 aggregate_dir="outputs/${SLURM_JOB_ID}_scale_swap_lr_adjusted_comparison"
-uv run python scripts/aggregate_scale_swap.py \
+uv run python scripts/reproducibility/real_scale_swap/aggregate_crossover.py \
   --assignment-a=outputs/18948_scale_swap_a \
   --assignment-b=outputs/18948_scale_swap_b \
   --lr-adjusted-a="${run_dirs[0]}" \

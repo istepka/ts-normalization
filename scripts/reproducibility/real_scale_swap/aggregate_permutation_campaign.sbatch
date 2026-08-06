@@ -12,6 +12,6 @@ set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
 mkdir -p logs
 
-uv run python -m scripts.aggregate_scale_swap_permutations \
+uv run python -m scripts.reproducibility.real_scale_swap.aggregate_permutation_campaign \
   --campaign-root=outputs/scale_swap_permutations \
   --output-dir=outputs/scale_swap_permutation_analysis

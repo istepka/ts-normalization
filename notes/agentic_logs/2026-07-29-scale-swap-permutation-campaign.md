@@ -15,3 +15,5 @@ It reports a one-sided exact Wilcoxon signed-rank test for each dataset with Hol
 It also produces aggregate and per-dataset linear-nMSE trajectories after averaging across all assignments at each scale.
 The CPU launcher `scripts/aggregate_scale_swap_permutations.sbatch` is submitted with an `afterok` dependency on every permutation-pair job, so analysis starts only after all 14 new pairs complete successfully.
 The completed inference is reproduced in `notebooks/scale_swap_wilcoxon.ipynb` using SciPy's exact one-sided Wilcoxon signed-rank test, Holm correction across the eight datasets, and an exact sign-test sensitivity analysis.
+
+The normalized-space control uses the same complementary assignment schedule and the same base learning rate. Pair 1 is already available in jobs 18948, while pairs 2--15 use `scripts/run_scale_swap_permutation_normalized_pair.sbatch` and write to `outputs/scale_swap_permutations_normalized`. The aggregator can overlay the normalized control with the learning-rate-adjusted original-space trajectories in the eight-panel appendix figure after those jobs finish.
