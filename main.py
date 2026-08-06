@@ -145,7 +145,7 @@ def main(cfg: DictConfig):
 
     # Write metrics + forecast snapshot data before plotting, so a plotting hiccup
     # never wastes a full run and figures can be restyled later without retraining
-    # (see scripts/replot_forecasts.py).
+    # (see scripts/reproducibility/synthetic_loss_space/replot_forecasts.py).
     summary = verification_summary(results, names)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
@@ -162,7 +162,8 @@ def main(cfg: DictConfig):
             target=h["probe_target"],
         )
     # Per-step metric histories for every setup, stacked over seeds, so the nMSE
-    # figures can be restyled/zoomed later without retraining (scripts/replot_metrics.py).
+    # figures can be restyled/zoomed later without retraining
+    # (scripts/reproducibility/synthetic_loss_space/replot_metrics.py).
     for label in setup_labels:
         hs = results[label]["histories"]
         np.savez(

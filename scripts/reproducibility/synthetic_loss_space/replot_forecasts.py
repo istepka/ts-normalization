@@ -3,7 +3,9 @@
 Lets us restyle the qualitative figure without retraining: `main.py` dumps
 `forecast_data_{label}.npz` per run, and this script reloads them and re-renders.
 
-    uv run python scripts/replot_forecasts.py [output_dir]
+    uv run python -m scripts.reproducibility.synthetic_loss_space.replot_forecasts [output_dir]
+
+Paper: regenerates the panels of Fig. loss_space_comp:synthetic:forecasts.
 """
 
 import sys

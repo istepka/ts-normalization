@@ -30,7 +30,7 @@ done
 RUN_DIR="outputs/${SLURM_JOB_ID}_loss_space_toy"
 
 # Any extra args are passed through as Hydra overrides, e.g. a longer variant:
-#   sbatch --job-name=loss_space_100k scripts/run.sbatch train.steps=100000
+#   sbatch --job-name=loss_space_100k scripts/reproducibility/synthetic_loss_space/train.sbatch train.steps=100000
 # (give a distinct --job-name when running variants concurrently, so the guard
 # above does not treat them as duplicates of each other).
 uv run python main.py device=cuda output_dir="$RUN_DIR" "$@"
