@@ -1,0 +1,830 @@
+<title>Loss-space pretraining: metric explorer</title>
+<style>
+  :root {
+    --paper: #f4f7f8;
+    --surface: #ffffff;
+    --surface-2: #eaf0f1;
+    --ink: #17232a;
+    --ink-soft: #4a5c65;
+    --ink-faint: #7b8d96;
+    --rule: #d4e0e3;
+    --rule-soft: #e5edef;
+    --teal: #0d7d7f;
+    --teal-2: #16a3a5;
+    --teal-3: #63c4c5;
+    --rust: #b8501b;
+    --rust-2: #d97426;
+    --rust-3: #eda368;
+    --alarm: #a3341f;
+    --alarm-bg: #f7e6e1;
+    --ok-bg: #dff0ef;
+    --grid: rgba(23, 35, 42, 0.07);
+    --shadow: 0 1px 2px rgba(23, 35, 42, .06), 0 8px 24px rgba(23, 35, 42, .05);
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0d1417;
+      --surface: #141e22;
+      --surface-2: #1b272c;
+      --ink: #e6eef0;
+      --ink-soft: #a8bcc3;
+      --ink-faint: #74898f;
+      --rule: #26363c;
+      --rule-soft: #1e2d32;
+      --teal: #35b3b4;
+      --teal-2: #56c9ca;
+      --teal-3: #8adcdc;
+      --rust: #e07a3a;
+      --rust-2: #ec9457;
+      --rust-3: #f4bb8d;
+      --alarm: #e8785a;
+      --alarm-bg: #331d17;
+      --ok-bg: #12312f;
+      --grid: rgba(230, 238, 240, 0.08);
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0d1417;
+    --surface: #141e22;
+    --surface-2: #1b272c;
+    --ink: #e6eef0;
+    --ink-soft: #a8bcc3;
+    --ink-faint: #74898f;
+    --rule: #26363c;
+    --rule-soft: #1e2d32;
+    --teal: #35b3b4;
+    --teal-2: #56c9ca;
+    --teal-3: #8adcdc;
+    --rust: #e07a3a;
+    --rust-2: #ec9457;
+    --rust-3: #f4bb8d;
+    --alarm: #e8785a;
+    --alarm-bg: #331d17;
+    --ok-bg: #12312f;
+    --grid: rgba(230, 238, 240, 0.08);
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 40px 24px 96px; }
+
+  header.masthead { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-faint); margin: 0 0 10px;
+  }
+  h1 { font-size: clamp(26px, 3.4vw, 38px); line-height: 1.12; letter-spacing: -.022em;
+       margin: 0 0 10px; text-wrap: balance; font-weight: 620; }
+  .standfirst { margin: 0; color: var(--ink-soft); max-width: 68ch; font-size: 16px; }
+
+  h2 { font-size: 19px; letter-spacing: -.012em; margin: 0 0 4px; font-weight: 600; }
+  .section-note { margin: 0 0 16px; color: var(--ink-soft); font-size: 14px; max-width: 74ch; }
+  section { margin-top: 40px; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 16px 17px; box-shadow: var(--shadow);
+  }
+  .card .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .11em;
+             text-transform: uppercase; color: var(--ink-faint); }
+  .card .v { font-family: var(--mono); font-size: 27px; font-variant-numeric: tabular-nums;
+             letter-spacing: -.02em; margin: 7px 0 3px; }
+  .card .d { font-size: 13px; color: var(--ink-soft); line-height: 1.45; }
+  .v.teal { color: var(--teal); } .v.rust { color: var(--rust); } .v.alarm { color: var(--alarm); }
+
+  .layout { display: grid; grid-template-columns: 232px 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .rail {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 15px; position: sticky; top: 16px;
+  }
+  @media (max-width: 900px) { .rail { position: static; } }
+  .rail h3 { font-family: var(--mono); font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase;
+             color: var(--ink-faint); margin: 0 0 9px; font-weight: 500; }
+  .rail .group + .group { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--rule-soft); }
+
+  select, button {
+    font-family: var(--sans); font-size: 13.5px; color: var(--ink);
+    background: var(--surface-2); border: 1px solid var(--rule); border-radius: 2px;
+    padding: 7px 9px; width: 100%; cursor: pointer;
+  }
+  select:focus-visible, button:focus-visible, label:focus-within { outline: 2px solid var(--teal); outline-offset: 1px; }
+  .btnrow { display: flex; gap: 6px; margin-top: 8px; }
+  .btnrow button { padding: 5px 6px; font-size: 12px; }
+  button:hover { border-color: var(--ink-faint); }
+
+  .toggle { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; font-size: 13px; }
+  .toggle input { accent-color: var(--teal); margin: 0; cursor: pointer; flex: none; }
+  .swatch { width: 15px; height: 3px; border-radius: 2px; flex: none; }
+  .toggle span.nm { font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 16px 18px 10px; box-shadow: var(--shadow);
+  }
+  .panel + .panel { margin-top: 18px; }
+  .chartwrap { width: 100%; overflow-x: auto; }
+  svg { display: block; width: 100%; height: auto; }
+  .axis-label { font-family: var(--mono); font-size: 10px; fill: var(--ink-faint); letter-spacing: .06em; }
+  .tick { font-family: var(--mono); font-size: 10px; fill: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+  .tip {
+    position: fixed; pointer-events: none; z-index: 50; opacity: 0; transition: opacity .1s;
+    background: var(--ink); color: var(--paper); font-family: var(--mono); font-size: 11.5px;
+    padding: 6px 8px; border-radius: 2px; white-space: nowrap; font-variant-numeric: tabular-nums;
+    box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  }
+
+  .flag {
+    border-left: 3px solid var(--alarm); background: var(--alarm-bg);
+    padding: 12px 15px; border-radius: 0 3px 3px 0; margin-top: 14px; font-size: 14px; color: var(--ink);
+  }
+  .flag.ok { border-left-color: var(--teal); background: var(--ok-bg); }
+  .flag b { font-weight: 620; }
+  code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); padding: 1px 4px; border-radius: 2px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  .tablewrap { overflow-x: auto; }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--rule-soft); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+       color: var(--ink-faint); font-weight: 500; border-bottom: 1px solid var(--rule); }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  tr.dim td { color: var(--ink-faint); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 4px 0 12px; font-size: 12.5px; color: var(--ink-soft); }
+  .legend .item { display: flex; align-items: center; gap: 6px; }
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--rule);
+           color: var(--ink-faint); font-size: 13px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">GiftEvalPretrain · loss-space study · rescored 2026-08-08</p>
+    <h1>Which metric survives contact with real data?</h1>
+    <p class="standfirst">
+      Twelve pretraining variants, rescored from checkpoints on scale-free metrics after the original
+      evaluation was found to score each variant in its own training space. Every variant here is evaluated on
+      identical natural-scale held-out windows, so the curves are directly comparable.
+    </p>
+  </header>
+
+  <div class="cards">
+    <div class="card">
+      <div class="k">MOMENT · head-to-head</div>
+      <div class="v teal">42 / 42</div>
+      <div class="d">Datasets where normalized-space beats original-space on raw MAE. Wilcoxon p = 4.6e-13.</div>
+    </div>
+    <div class="card">
+      <div class="k">MASE Gini · normalized vs original</div>
+      <div class="v">0.163 <span style="color:var(--ink-faint);font-size:18px">/</span> 0.369</div>
+      <div class="d">2.3&times; lower inequality, closely matching the synthetic study's 2.4&times;.</div>
+    </div>
+    <div class="card">
+      <div class="k">Mean-nMSE Gini · all MOMENT variants</div>
+      <div class="v alarm">0.976</div>
+      <div class="d">Identical to 4 decimals across every variant. One <code>m5</code> window sets it. Unusable.</div>
+    </div>
+    <div class="card">
+      <div class="k">TimesFM · head-to-head after the fix</div>
+      <div class="v">11 / 42</div>
+      <div class="d">Normalized-space wins on MASE. Median ratio 1.09&times;. The MOMENT effect does <em>not</em> reproduce here.</div>
+    </div>
+  </div>
+
+  <div class="flag ok" style="margin-top:18px">
+    <b>These are the refreshed results.</b> The six TimesFM variants were retrained after the first-patch &sigma;
+    fix; the six MOMENT variants are unchanged and were rescored offline. Every variant is evaluated on identical
+    natural-scale windows with chunked, dropout-free evaluation.
+  </div>
+
+  <section>
+    <h2>Trajectories</h2>
+    <p class="section-note">
+      Checkpoints every 2,000 steps. Pick a metric, then toggle variants. Log scale is on by default because
+      the TimesFM normalized variants run many orders of magnitude above everything else.
+    </p>
+    <div class="layout">
+      <aside class="rail">
+        <div class="group">
+          <h3>Metric</h3>
+          <select id="metric"></select>
+          <div class="btnrow">
+            <button id="logToggle" type="button">Log scale: on</button>
+          </div>
+        </div>
+        <div class="group">
+          <h3>Variants</h3>
+          <div class="btnrow" style="margin:0 0 10px">
+            <button data-preset="moment" type="button">MOMENT</button>
+            <button data-preset="timesfm" type="button">TimesFM</button>
+            <button data-preset="all" type="button">All</button>
+          </div>
+          <div id="arms"></div>
+        </div>
+      </aside>
+      <div>
+        <div class="panel">
+          <div class="legend">
+            <div class="item"><span class="swatch" style="background:var(--teal)"></span> normalized space</div>
+            <div class="item"><span class="swatch" style="background:var(--rust)"></span> original space</div>
+            <div class="item"><svg width="26" height="8" aria-hidden="true"><line x1="0" y1="4" x2="26" y2="4" stroke="currentColor" stroke-width="2"/></svg> MOMENT</div>
+            <div class="item"><svg width="26" height="8" aria-hidden="true"><line x1="0" y1="4" x2="26" y2="4" stroke="currentColor" stroke-width="2" stroke-dasharray="5 3"/></svg> TimesFM</div>
+          </div>
+          <div class="chartwrap"><svg id="lineChart" viewBox="0 0 860 420" role="img" aria-label="Metric trajectory over training steps"></svg></div>
+        </div>
+        <div class="flag" id="metricFlag"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Head-to-head at the final step</h2>
+    <p class="section-note">
+      Each point is one of the 42 datasets, normalized-space error against original-space error on the same
+      windows. Points below the diagonal favour normalized space. Because both variants share an identical MASE
+      denominator, the ratio between them is exactly the raw MAE ratio &mdash; the baseline choice cancels.
+    </p>
+    <div class="layout">
+      <aside class="rail">
+        <div class="group">
+          <h3>Model</h3>
+          <select id="scModel">
+            <option value="moment">MOMENT</option>
+            <option value="timesfm">TimesFM</option>
+          </select>
+        </div>
+        <div class="group">
+          <h3>Scale setting</h3>
+          <select id="scSetting">
+            <option value="natural">natural mixture</option>
+            <option value="A">controlled scale A</option>
+            <option value="B">controlled scale B</option>
+          </select>
+        </div>
+        <div class="group">
+          <h3>Metric</h3>
+          <select id="scMetric">
+            <option value="mase">MASE</option>
+            <option value="nmse_median">median nMSE</option>
+            <option value="nmse">mean nMSE</option>
+          </select>
+        </div>
+      </aside>
+      <div>
+        <div class="panel">
+          <div class="chartwrap"><svg id="scatter" viewBox="0 0 860 430" role="img" aria-label="Per-dataset normalized versus original error"></svg></div>
+        </div>
+        <div class="panel">
+          <h2 style="font-size:15px">Per-dataset advantage, ranked</h2>
+          <p class="section-note" style="margin-bottom:10px">
+            log<sub>10</sub>(normalized / original). Bars left of centre favour normalized space.
+          </p>
+          <div class="chartwrap"><svg id="ranked" viewBox="0 0 860 560" role="img" aria-label="Ranked per-dataset log ratio"></svg></div>
+        </div>
+        <div class="flag ok" id="scFlag"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Final step, every variant</h2>
+    <p class="section-note">Sorted by MASE Gini. Rows greyed out are variants I would not report.</p>
+    <div class="panel tablewrap">
+      <table id="summary">
+        <thead><tr>
+          <th>variant</th><th>pooled MASE</th><th>MASE Gini</th><th>median nMSE</th>
+          <th>med-nMSE Gini</th><th>mean-nMSE Gini</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="flag ok">
+      <b>TimesFM normalized variants are now trainable.</b> Before the fix, pooled MASE read 5.8 / 1195.7 /
+      7230.5 across variants differing only in scale assignment &mdash; a three-order spread that was the
+      signature of unstable training. After it: 3.06 / 3.35 / 2.97, tightly grouped and comparable to the
+      original variants (2.95 / 2.82 / 3.00). Diagnosis on real batches from a fresh init: 70 of 2,048 windows
+      sat exactly at the &sigma; clamp and the top 1% of windows carried 100% of the normalized-space loss.
+    </div>
+  </section>
+
+  <section>
+    <h2>The headline result, and where it stops holding</h2>
+    <p class="section-note">
+      The loss-space effect is unambiguous for MOMENT and absent for TimesFM. Both were trained on the same
+      corpus, the same window index, and the same schedule, so the difference is in the objective, not the data.
+    </p>
+    <div class="panel">
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>model</th><th style="text-align:left">task</th><th>normalized wins (MASE)</th>
+            <th>median ratio</th><th>MASE Gini, norm vs orig</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td>MOMENT</td>
+              <td style="text-align:left">masked reconstruction &mdash; target <em>inside</em> the context</td>
+              <td class="num">42 / 42</td><td class="num">0.414&times;</td><td class="num">0.163 vs 0.369</td>
+            </tr>
+            <tr>
+              <td>TimesFM</td>
+              <td style="text-align:left">forecasting &mdash; target <em>outside</em> the context</td>
+              <td class="num">11 / 42</td><td class="num">1.090&times;</td><td class="num">0.407 vs 0.456</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="flag" style="margin-top:16px">
+        <b>Read this as a boundary condition, not a contradiction.</b> For MOMENT, normalized-space loss wins
+        on every single dataset and more than halves cross-dataset inequality. For TimesFM the same
+        comparison is a coin flip that mildly favours <em>original</em> space (median ratio 1.09&times;), and
+        the Gini gap shrinks to 0.407 vs 0.456. Any claim that normalized-space loss is universally better is
+        not supported by these runs; what is supported is that it is decisively better for the
+        reconstruction objective and neutral-to-slightly-worse for this forecasting objective.
+      </div>
+      <p style="margin:14px 0 0;color:var(--ink-soft);font-size:14px;max-width:74ch">
+        The most likely mechanism is where the target sits relative to the normalization statistics. MOMENT
+        reconstructs positions <em>inside</em> the window RevIN normalized, so the target is always on the
+        same scale the loss is measured in. TimesFM forecasts <em>beyond</em> the context, normalized by the
+        first patch only, so the target routinely sits off that scale &mdash; which both weakens the benefit
+        of normalized-space loss and is the same structural fact that made the degenerate windows ill-posed.
+        This is a hypothesis the current runs motivate but do not test.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Why TimesFM breaks, and what a faithful fix looks like</h2>
+    <p class="section-note">
+      Recorded here because the fix has to keep TimesFM close to its released behaviour rather than
+      quietly re-engineering the model.
+    </p>
+
+    <div class="panel" style="padding-bottom:18px">
+      <h2 style="font-size:15px">TimesFM normalizes by the first patch, not the context</h2>
+      <p style="margin:6px 0 12px;color:var(--ink-soft);font-size:14px;max-width:74ch">
+        <code>_masked_mean_std</code> in the vendored decoder states it directly: <em>"We return the
+        statistics of the first patch with more than three non-padded values."</em> So &mu; and &sigma; come
+        from the first 32 timesteps, not the 512-step context, and &sigma; is then clamped:
+        <code>sigma = clamp(sigma, min=tolerance)</code> with <code>tolerance = 1e-6</code>.
+      </p>
+      <p style="margin:0 0 12px;color:var(--ink-soft);font-size:14px;max-width:74ch">
+        A series that merely <em>starts</em> flat therefore gets &sigma; &asymp; 0 even when the full context
+        varies. This is why filtering on the window index's <code>context_std</code> is the wrong test: it
+        flags only 6,609 of 41M windows (0.016%), because it measures the whole context rather than the
+        statistic TimesFM actually divides by.
+      </p>
+
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>condition</th><th style="text-align:left">where the loss is computed</th><th style="text-align:left">effect of tiny &sigma;</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>timesfm_native_original</code></td>
+              <td style="text-align:left">after <code>_reverse_transform</code></td>
+              <td style="text-align:left">&sigma; cancels — released behaviour, healthy</td>
+            </tr>
+            <tr>
+              <td><code>timesfm_normalized</code></td>
+              <td style="text-align:left">before the inverse transform</td>
+              <td style="text-align:left">target divided by &sigma; &rarr; values to 1e9, loss to 3e17</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="flag ok" style="margin-top:16px">
+        <b>The pathology is not in TimesFM.</b> The released model computes its loss in original space, where
+        the clamp is harmless. The normalized-space condition is <em>our</em> addition for this study, and it is
+        the thing that is ill-posed when the first patch is flat. So the fix belongs on our side of the
+        boundary, not in the vendored file.
+      </div>
+
+      <p style="margin:14px 0 0;color:var(--ink-soft);font-size:14px;max-width:74ch">
+        <b>Fix, as implemented:</b> <code>forward</code> flags
+        <code>degenerate = sigma &lt;= tolerance &times; (1 + 1e-6)</code> using TimesFM's own statistic;
+        <code>training_step_metrics</code> drops those windows from the loss, and both reported metrics
+        return NaN for them so the existing NaN-dropping aggregation removes them. The vendored decoder is
+        unchanged at its pinned revision, and the clamp and first-patch convention are preserved. The same
+        exclusion applies in both loss spaces, so the variants stay paired on identical windows.
+      </p>
+      <div class="flag ok" style="margin-top:14px">
+        <b>Verified in flight.</b> A 60-step smoke run returned <code>final_pooled_mse = 289.5</code> against
+        1e12+ before. In the refreshed 30k-step runs, <code>eval/pooled_mase</code> reads 2.85&ndash;4.12
+        against 7230.5 in the broken variants, and pooled nMSE 101&ndash;176 against 1.06e12.
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Is the MOMENT result a learning-rate confound?</h2>
+    <p class="section-note">
+      Both MOMENT variants trained at <code>lr = 1e-4</code> with <code>grad_clip_norm = 1.0</code>, and no
+      learning-rate adjustment was applied to the original-space variant. Measured on identical batches from a
+      fresh init:
+    </p>
+    <div class="panel">
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>variant</th><th>median grad norm</th><th>fraction above the 1.0 clip</th></tr></thead>
+          <tbody>
+            <tr><td>moment_normalized</td><td class="num">8.83e+01</td><td class="num">1.00</td></tr>
+            <tr><td>moment_original</td><td class="num">2.92e+10</td><td class="num">1.00</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="flag ok" style="margin-top:14px">
+        <b>Both variants are clipped on every step.</b> Each update is rescaled to norm exactly 1.0, so the variants
+        already take steps of identical gradient magnitude &mdash; the runs <em>are</em> the unit-norm
+        gradient-matched control. What clipping cannot equalize is gradient <em>direction</em>: within a
+        batch, original-space loss weights high-magnitude datasets far more heavily. So the sweep is a
+        directional effect, not a step-size artifact, which is what the synthetic study's own grad-matched
+        control predicted.
+      </div>
+      <p style="margin:14px 0 0;color:var(--ink-soft);font-size:14px;max-width:74ch">
+        The same reasoning is why no learning-rate sweep is planned for the natural mixture. In a controlled
+        experiment <em>b</em> is imposed, so the correction <em>b<sup>p</sup></em> is known. In natural
+        pretraining every dataset carries its own <em>b<sub>d</sub></em>, so the required correction is not a
+        scalar. One global learning rate can absorb one global factor; it cannot undo per-source
+        heterogeneous rescaling.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    Rescored from saved checkpoints with <code>scripts/recompute_tsfm_scale_free_metrics.py</code>; no
+    retraining. 15 checkpoints per variant, 42 datasets, stratified eval sample fixed by <code>EVAL_SEED</code>.
+    Mean-nMSE columns are shown for continuity with the paper's definition, not because they should be reported.
+  </footer>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script id="payload" type="application/json">__DATA__</script>
+<script>
+(function () {
+  "use strict";
+  const DATA = JSON.parse(document.getElementById("payload").textContent);
+  const tip = document.getElementById("tip");
+  const SVGNS = "http://www.w3.org/2000/svg";
+
+  const LABELS = Object.keys(DATA.series).sort();
+  const METRIC_INFO = {
+    pooled_mase: ["Pooled MASE", "Natural-mixture mean MASE. The robust headline metric."],
+    mase_dataset_gini: ["MASE Gini (dataset)", "Inequality of per-dataset MASE. The primary equity metric."],
+    mase_dataset_mean: ["MASE, unweighted dataset mean", "Averages datasets equally rather than windows."],
+    nmse_median_dataset_mean: ["median nMSE (dataset mean)", "Median-reduced per dataset, then averaged. Outlier-resistant."],
+    nmse_median_dataset_gini: ["median-nMSE Gini", "Read this next to the level: the original variant sits at nMSE ~1, the trivial-predictor floor, so its low Gini is equality of failure."],
+    pooled_nmse: ["Pooled nMSE", "Mean-reduced, so a single near-zero-sigma window dominates."],
+    nmse_dataset_mean: ["mean nMSE (dataset mean)", "Dominated by one m5 window at nMSE 6.6e7."],
+    nmse_dataset_gini: ["mean-nMSE Gini", "Unusable: 0.976 for every MOMENT variant because one window sets it."],
+    mase_domain_gini: ["MASE Gini (domain)", "Seven domains rather than 42 datasets."],
+    nmse_domain_gini: ["mean-nMSE Gini (domain)", "Same outlier problem as the dataset-level version."]
+  };
+  const METRIC_ORDER = ["pooled_mase","mase_dataset_gini","mase_dataset_mean","nmse_median_dataset_mean",
+    "nmse_median_dataset_gini","pooled_nmse","nmse_dataset_mean","nmse_dataset_gini",
+    "mase_domain_gini","nmse_domain_gini"];
+
+  function armColor(label) {
+    const norm = label.indexOf("normalized") >= 0;
+    const suffix = label.endsWith("_natural") ? 0 : label.endsWith("_A") ? 1 : 2;
+    const teal = ["--teal", "--teal-2", "--teal-3"];
+    const rust = ["--rust", "--rust-2", "--rust-3"];
+    return "var(" + (norm ? teal : rust)[suffix] + ")";
+  }
+  const isTimesfm = (l) => l.indexOf("timesfm") === 0;
+  const shortName = (l) => l.replace("moment_", "M·").replace("timesfm_", "T·")
+                            .replace("normalized", "norm").replace("original", "orig")
+                            .replace("_natural", "·nat").replace("_A", "·A").replace("_B", "·B");
+
+  function el(tag, attrs, parent) {
+    const n = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function clear(svg) { while (svg.firstChild) svg.removeChild(svg.firstChild); }
+  function fmt(v) {
+    if (v === null || !isFinite(v)) return "n/a";
+    const a = Math.abs(v);
+    if (a !== 0 && (a < 1e-3 || a >= 1e5)) return v.toExponential(2);
+    return v.toFixed(a < 1 ? 3 : a < 100 ? 2 : 1);
+  }
+  function showTip(evt, html) {
+    tip.innerHTML = html;
+    tip.style.opacity = "1";
+    const pad = 14;
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    const r = tip.getBoundingClientRect();
+    if (x + r.width > window.innerWidth - 8) x = evt.clientX - r.width - pad;
+    if (y + r.height > window.innerHeight - 8) y = evt.clientY - r.height - pad;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.opacity = "0"; };
+
+  function niceTicks(lo, hi, n) {
+    if (!(isFinite(lo) && isFinite(hi)) || lo === hi) return [lo];
+    const raw = (hi - lo) / n;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const norm = raw / mag;
+    const step = (norm >= 5 ? 10 : norm >= 2 ? 5 : norm >= 1 ? 2 : 1) * mag;
+    const out = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(v);
+    return out;
+  }
+
+  // ---------- trajectory chart ----------
+  const metricSel = document.getElementById("metric");
+  METRIC_ORDER.forEach((m) => {
+    const o = document.createElement("option");
+    o.value = m; o.textContent = METRIC_INFO[m][0];
+    metricSel.appendChild(o);
+  });
+  metricSel.value = "pooled_mase";
+
+  let useLog = true;
+  const selected = new Set(LABELS.filter((l) => l.indexOf("moment") === 0));
+
+  const armsBox = document.getElementById("arms");
+  LABELS.forEach((l) => {
+    const lab = document.createElement("label");
+    lab.className = "toggle";
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = selected.has(l); cb.dataset.label = l;
+    cb.addEventListener("change", () => {
+      if (cb.checked) selected.add(l); else selected.delete(l);
+      drawLine();
+    });
+    const sw = document.createElement("span");
+    sw.className = "swatch"; sw.style.background = armColor(l);
+    if (isTimesfm(l)) sw.style.background =
+      "repeating-linear-gradient(90deg," + armColor(l) + " 0 5px, transparent 5px 8px)";
+    const nm = document.createElement("span");
+    nm.className = "nm"; nm.textContent = shortName(l);
+    lab.appendChild(cb); lab.appendChild(sw); lab.appendChild(nm);
+    armsBox.appendChild(lab);
+  });
+
+  function drawLine() {
+    const svg = document.getElementById("lineChart");
+    clear(svg);
+    const W = 860, H = 420, m = { t: 16, r: 18, b: 42, l: 68 };
+    const metric = metricSel.value;
+    document.getElementById("metricFlag").innerHTML =
+      "<b>" + METRIC_INFO[metric][0] + ".</b> " + METRIC_INFO[metric][1];
+
+    const shown = LABELS.filter((l) => selected.has(l));
+    const pts = {};
+    let lo = Infinity, hi = -Infinity, sMax = 0;
+    shown.forEach((l) => {
+      const s = DATA.series[l];
+      const arr = [];
+      for (let i = 0; i < s.step.length; i++) {
+        const v = s[metric][i];
+        if (v === null || !isFinite(v)) continue;
+        if (useLog && v <= 0) continue;
+        arr.push([s.step[i], v]);
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+        if (s.step[i] > sMax) sMax = s.step[i];
+      }
+      pts[l] = arr;
+    });
+    if (!isFinite(lo)) {
+      el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "tick" }, svg).textContent =
+        "no finite values for this selection";
+      return;
+    }
+    if (lo === hi) { lo = lo * 0.9 || -1; hi = hi * 1.1 || 1; }
+
+    const tf = useLog ? Math.log10 : (v) => v;
+    let y0 = tf(lo), y1 = tf(hi);
+    const padY = (y1 - y0) * 0.08 || 1;
+    y0 -= padY; y1 += padY;
+    const X = (s) => m.l + (s / sMax) * (W - m.l - m.r);
+    const Y = (v) => H - m.b - ((tf(v) - y0) / (y1 - y0)) * (H - m.t - m.b);
+
+    // grid + y ticks
+    const yticks = useLog
+      ? (function () { const a = []; for (let e = Math.floor(y0); e <= Math.ceil(y1); e++) a.push(Math.pow(10, e)); return a; })()
+      : niceTicks(y0, y1, 6);
+    yticks.forEach((v) => {
+      if (tf(v) < y0 || tf(v) > y1) return;
+      const y = Y(v);
+      el("line", { x1: m.l, y1: y, x2: W - m.r, y2: y, stroke: "var(--grid)", "stroke-width": 1 }, svg);
+      el("text", { x: m.l - 8, y: y + 3.5, "text-anchor": "end", class: "tick" }, svg).textContent =
+        useLog ? (v >= 1e-3 && v < 1e5 ? String(+v.toPrecision(3)) : v.toExponential(0)) : fmt(v);
+    });
+    niceTicks(0, sMax, 6).forEach((s) => {
+      if (s < 0 || s > sMax) return;
+      const x = X(s);
+      el("line", { x1: x, y1: m.t, x2: x, y2: H - m.b, stroke: "var(--grid)", "stroke-width": 1 }, svg);
+      el("text", { x: x, y: H - m.b + 16, "text-anchor": "middle", class: "tick" }, svg).textContent =
+        s >= 1000 ? (s / 1000) + "k" : String(s);
+    });
+    el("text", { x: W / 2, y: H - 6, "text-anchor": "middle", class: "axis-label" }, svg).textContent = "TRAINING STEP";
+    el("text", { x: 14, y: H / 2, "text-anchor": "middle", class: "axis-label",
+                 transform: "rotate(-90 14 " + H / 2 + ")" }, svg).textContent =
+      METRIC_INFO[metric][0].toUpperCase() + (useLog ? " (LOG)" : "");
+
+    shown.forEach((l) => {
+      const arr = pts[l];
+      if (!arr.length) return;
+      const d = arr.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1)).join(" ");
+      el("path", {
+        d: d, fill: "none", stroke: armColor(l), "stroke-width": 2,
+        "stroke-linejoin": "round", "stroke-linecap": "round",
+        "stroke-dasharray": isTimesfm(l) ? "6 4" : "none", opacity: .95
+      }, svg);
+      const last = arr[arr.length - 1];
+      el("circle", { cx: X(last[0]), cy: Y(last[1]), r: 3.6, fill: armColor(l) }, svg);
+      arr.forEach((p) => {
+        const c = el("circle", { cx: X(p[0]), cy: Y(p[1]), r: 8, fill: "transparent", style: "cursor:crosshair" }, svg);
+        c.addEventListener("mousemove", (e) =>
+          showTip(e, shortName(l) + "<br>step " + p[0] + " · " + fmt(p[1])));
+        c.addEventListener("mouseleave", hideTip);
+      });
+    });
+  }
+
+  document.getElementById("logToggle").addEventListener("click", function () {
+    useLog = !useLog;
+    this.textContent = "Log scale: " + (useLog ? "on" : "off");
+    drawLine();
+  });
+  metricSel.addEventListener("change", drawLine);
+  document.querySelectorAll("[data-preset]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const p = b.dataset.preset;
+      selected.clear();
+      LABELS.forEach((l) => {
+        if (p === "all" || l.indexOf(p) === 0) selected.add(l);
+      });
+      armsBox.querySelectorAll("input").forEach((cb) => { cb.checked = selected.has(cb.dataset.label); });
+      drawLine();
+    });
+  });
+
+  // ---------- scatter + ranked ----------
+  const scModel = document.getElementById("scModel");
+  const scSetting = document.getElementById("scSetting");
+  const scMetric = document.getElementById("scMetric");
+
+  function pairData() {
+    const model = scModel.value, setting = scSetting.value, metric = scMetric.value;
+    const n = DATA.per_dataset[model + "_normalized_" + setting];
+    const o = DATA.per_dataset[model + "_original_" + setting];
+    if (!n || !o) return [];
+    const out = [];
+    Object.keys(n[metric]).forEach((k) => {
+      const a = n[metric][k], b = o[metric][k];
+      if (a === null || b === null || !isFinite(a) || !isFinite(b) || a <= 0 || b <= 0) return;
+      out.push({ name: k, norm: a, orig: b, lr: Math.log10(a / b) });
+    });
+    return out;
+  }
+
+  function drawScatter() {
+    const svg = document.getElementById("scatter");
+    clear(svg);
+    const W = 860, H = 430, m = { t: 18, r: 20, b: 46, l: 70 };
+    const rows = pairData();
+    if (!rows.length) {
+      el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "tick" }, svg).textContent = "no paired data";
+      return;
+    }
+    let lo = Infinity, hi = -Infinity;
+    rows.forEach((r) => {
+      lo = Math.min(lo, r.norm, r.orig); hi = Math.max(hi, r.norm, r.orig);
+    });
+    let a0 = Math.log10(lo), a1 = Math.log10(hi);
+    const pad = (a1 - a0) * 0.07 || 0.5; a0 -= pad; a1 += pad;
+    const X = (v) => m.l + ((Math.log10(v) - a0) / (a1 - a0)) * (W - m.l - m.r);
+    const Y = (v) => H - m.b - ((Math.log10(v) - a0) / (a1 - a0)) * (H - m.t - m.b);
+
+    for (let e = Math.floor(a0); e <= Math.ceil(a1); e++) {
+      const v = Math.pow(10, e);
+      if (Math.log10(v) < a0 || Math.log10(v) > a1) continue;
+      el("line", { x1: X(v), y1: m.t, x2: X(v), y2: H - m.b, stroke: "var(--grid)", "stroke-width": 1 }, svg);
+      el("line", { x1: m.l, y1: Y(v), x2: W - m.r, y2: Y(v), stroke: "var(--grid)", "stroke-width": 1 }, svg);
+      el("text", { x: X(v), y: H - m.b + 16, "text-anchor": "middle", class: "tick" }, svg).textContent =
+        (v >= 1e-3 && v < 1e5) ? String(+v.toPrecision(3)) : v.toExponential(0);
+      el("text", { x: m.l - 8, y: Y(v) + 3.5, "text-anchor": "end", class: "tick" }, svg).textContent =
+        (v >= 1e-3 && v < 1e5) ? String(+v.toPrecision(3)) : v.toExponential(0);
+    }
+    // diagonal
+    const dlo = Math.pow(10, a0), dhi = Math.pow(10, a1);
+    el("line", { x1: X(dlo), y1: Y(dlo), x2: X(dhi), y2: Y(dhi),
+                 stroke: "var(--ink-faint)", "stroke-width": 1, "stroke-dasharray": "4 4" }, svg);
+    el("text", { x: W - m.r - 6, y: Y(dhi) + 32, "text-anchor": "end", class: "axis-label" }, svg)
+      .textContent = "PARITY";
+
+    let wins = 0;
+    rows.forEach((r) => {
+      if (r.norm < r.orig) wins++;
+      const c = el("circle", {
+        cx: X(r.orig), cy: Y(r.norm), r: 5,
+        fill: r.norm < r.orig ? "var(--teal)" : "var(--rust)",
+        "fill-opacity": .55, stroke: r.norm < r.orig ? "var(--teal)" : "var(--rust)", "stroke-width": 1.3,
+        style: "cursor:crosshair"
+      }, svg);
+      c.addEventListener("mousemove", (e) => showTip(e,
+        r.name + "<br>normalized " + fmt(r.norm) + "<br>original&nbsp;&nbsp; " + fmt(r.orig) +
+        "<br>ratio " + fmt(r.norm / r.orig) + "&times;"));
+      c.addEventListener("mouseleave", hideTip);
+    });
+
+    el("text", { x: W / 2, y: H - 6, "text-anchor": "middle", class: "axis-label" }, svg)
+      .textContent = "ORIGINAL-SPACE VARIANT →";
+    el("text", { x: 14, y: H / 2, "text-anchor": "middle", class: "axis-label",
+                 transform: "rotate(-90 14 " + H / 2 + ")" }, svg)
+      .textContent = "← NORMALIZED-SPACE VARIANT";
+
+    const med = rows.map((r) => r.lr).sort((x, y) => x - y)[Math.floor(rows.length / 2)];
+    document.getElementById("scFlag").innerHTML =
+      "<b>" + wins + " of " + rows.length + " datasets favour normalized space.</b> " +
+      "Typical ratio " + Math.pow(10, med).toFixed(2) + "&times; (median of per-dataset log ratios). " +
+      "Points below the dashed parity line are datasets where normalized-space training produced lower error.";
+  }
+
+  function drawRanked() {
+    const svg = document.getElementById("ranked");
+    clear(svg);
+    const rows = pairData().sort((a, b) => a.lr - b.lr);
+    const W = 860, m = { t: 12, r: 20, b: 34, l: 190 };
+    const rowH = 11.5, H = m.t + m.b + rows.length * rowH;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + Math.max(H, 120));
+    if (!rows.length) return;
+    const mx = Math.max(...rows.map((r) => Math.abs(r.lr))) || 1;
+    const X = (v) => m.l + ((v + mx) / (2 * mx)) * (W - m.l - m.r);
+    const zero = X(0);
+    el("line", { x1: zero, y1: m.t, x2: zero, y2: H - m.b, stroke: "var(--ink-faint)", "stroke-width": 1 }, svg);
+    rows.forEach((r, i) => {
+      const y = m.t + i * rowH;
+      const x = X(r.lr);
+      el("rect", {
+        x: Math.min(x, zero), y: y + 1.5, width: Math.abs(x - zero), height: rowH - 3.5,
+        fill: r.lr < 0 ? "var(--teal)" : "var(--rust)", "fill-opacity": .8, style: "cursor:crosshair"
+      }, svg).addEventListener("mousemove", (e) => showTip(e,
+        r.name + "<br>ratio " + fmt(r.norm / r.orig) + "&times;<br>norm " + fmt(r.norm) + " · orig " + fmt(r.orig)));
+      svg.lastChild.addEventListener("mouseleave", hideTip);
+      el("text", { x: m.l - 8, y: y + rowH - 3, "text-anchor": "end", class: "tick" }, svg).textContent = r.name;
+    });
+    niceTicks(-mx, mx, 6).forEach((v) => {
+      el("text", { x: X(v), y: H - m.b + 18, "text-anchor": "middle", class: "tick" }, svg)
+        .textContent = v.toFixed(1);
+    });
+    el("text", { x: W / 2, y: H - 6, "text-anchor": "middle", class: "axis-label" }, svg)
+      .textContent = "LOG10( NORMALIZED / ORIGINAL )";
+  }
+
+  [scModel, scSetting, scMetric].forEach((s) =>
+    s.addEventListener("change", () => { drawScatter(); drawRanked(); }));
+
+  // ---------- summary table ----------
+  (function () {
+    const tb = document.querySelector("#summary tbody");
+    const rows = LABELS.map((l) => {
+      const s = DATA.series[l], i = s.step.length - 1;
+      return {
+        label: l,
+        mase: s.pooled_mase[i],
+        gini: s.mase_dataset_gini[i],
+        med: s.nmse_median_dataset_mean[i],
+        medg: s.nmse_median_dataset_gini[i],
+        meang: s.nmse_dataset_gini[i],
+        bad: l.indexOf("timesfm_normalized") === 0
+      };
+    }).sort((a, b) => a.gini - b.gini);
+    rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      if (r.bad) tr.className = "dim";
+      const cells = [r.label + (r.bad ? "  ⚠" : ""), fmt(r.mase), fmt(r.gini), fmt(r.med), fmt(r.medg), fmt(r.meang)];
+      cells.forEach((c, i) => {
+        const td = document.createElement("td");
+        td.textContent = c;
+        if (i) td.className = "num";
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+  })();
+
+  drawLine(); drawScatter(); drawRanked();
+})();
+</script>
