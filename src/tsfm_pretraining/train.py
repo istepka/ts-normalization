@@ -21,11 +21,13 @@ from pathlib import Path
 
 import hydra
 import numpy as np
+import pandas as pd
 import torch
 from omegaconf import DictConfig, OmegaConf
 
 import wandb
 
+from . import chronos2_adapter as ca
 from . import gifteval_corpus as gc
 from . import losses as L
 from . import moment_adapter as ma
@@ -33,6 +35,14 @@ from . import timesfm_model as tm
 from . import window_index as wi
 
 TIMESFM_CONFIGS = {"17m": tm.CONFIG_17M, "70m": tm.CONFIG_70M}
+# Fixed, not derived from cfg.seed -> the held-out eval sample (both the
+# natural-mixture pooled draw and the per-dataset stratified draw) is
+# identical across every checkpoint within a run and across every condition,
+# matching src/data.py's VAL_SEED convention ("the held-out validation set is
+# identical across all runs"). Previously this was seeded by the current
+# step, which resampled a different validation subset at every checkpoint --
+# conflating real model progress with eval-sampling noise across the curve.
+EVAL_SEED = 12345
 OPTIMIZERS = {
     "sgd": torch.optim.SGD,
     "adamw": torch.optim.AdamW,
@@ -93,15 +103,20 @@ def update_windows_processed(counter: dict[str, dict[str, int]], rows) -> None:
             counter[level][value] = counter[level].get(value, 0) + int(count)
 
 
-def dispersion_report(
-    per_example_loss: np.ndarray, rows, n_sources_min: int = 2
+def source_breakdown(
+    per_example_loss: np.ndarray, rows, n_sources_min: int = 2, reducer: str = "mean"
 ) -> dict:
-    """Gini / unweighted-mean / pooled-mean at dataset, domain, and frequency
-    granularity, plus the pooled natural-mixture global error, per the plan's
-    "Dispersion and equity metrics" section."""
-    report = {"pooled_global_error": L.pooled_mean(per_example_loss)}
+    """Gini / unweighted-mean at dataset, domain, and frequency granularity,
+    per the plan's "Dispersion and equity metrics" section. Callers combine
+    this with `pooled_global_error` computed separately -- from a natural-
+    mixture sample, not this one, if `rows` came from
+    `sample_stratified_eval_rows` (see that function's docstring for why)."""
+    report = {}
     for level in ("dataset", "domain", "frequency"):
-        per_source = L.group_mean_by_source(per_example_loss, rows[level].to_numpy())
+        group = (
+            L.group_mean_by_source if reducer == "mean" else L.group_median_by_source
+        )
+        per_source = group(per_example_loss, rows[level].to_numpy())
         metrics = L.dispersion_metrics(per_source)
         if metrics["n_sources"] < n_sources_min:
             continue
@@ -109,8 +124,60 @@ def dispersion_report(
     return report
 
 
+EVAL_CHUNK = 512  # windows per eval forward; bounds peak activation memory
+
+
+def slice_batch(batch, start: int, stop: int):
+    """Row-slices a MomentBatch/TimesFMBatch across its per-example fields,
+    leaving scalar fields (e.g. batch_seed) untouched."""
+    fields = {}
+    for name, value in vars(batch).items():
+        if isinstance(value, (torch.Tensor, np.ndarray)):
+            fields[name] = value[start:stop]
+        else:
+            fields[name] = value
+    return type(batch)(**fields)
+
+
+def eval_scale_free(
+    forward_fn,
+    model,
+    batch,
+    condition: str,
+    device: str,
+    forward_kwargs: dict | None = None,
+) -> tuple:
+    """Per-example nMSE and MASE over `batch`, run in EVAL_CHUNK-sized forwards.
+
+    The eval samples are eval_batches * batch_size windows, far too large to
+    hold activations for in a single forward, so the batch is kept on CPU and
+    moved chunk by chunk. Dropout is disabled for the duration: MOMENT trains
+    with dropout 0.1, and sampling it at eval time adds noise to every
+    reported metric.
+    """
+    forward_kwargs = {} if forward_kwargs is None else forward_kwargs
+    was_training = model.training
+    model.eval()
+    n = len(batch.dataset)
+    nmse_parts, mase_parts = [], []
+    try:
+        for start in range(0, n, EVAL_CHUNK):
+            chunk = slice_batch(batch, start, min(start + EVAL_CHUNK, n)).to(device)
+            with torch.no_grad():
+                out = forward_fn(model, chunk, condition, **forward_kwargs)
+            nmse_parts.append(out.normalized_mse.cpu().numpy())
+            mase_parts.append(out.mase.cpu().numpy())
+    finally:
+        if was_training:
+            model.train()
+    return np.concatenate(nmse_parts), np.concatenate(mase_parts)
+
+
 def log_dispersion(wandb_run, report: dict, step: int) -> None:
-    flat = {"eval/pooled_global_error": report["pooled_global_error"]}
+    flat = {
+        "eval/pooled_global_error": report["pooled_global_error"],
+        "eval/pooled_mase": report["pooled_mase"],
+    }
     for level in ("dataset", "domain", "frequency"):
         if level not in report:
             continue
@@ -119,16 +186,56 @@ def log_dispersion(wandb_run, report: dict, step: int) -> None:
         flat[f"eval/{level}_n_sources"] = report[level]["n_sources"]
         for name, value in report[level]["per_source_mean_error"].items():
             flat[f"eval/{level}_error/{name}"] = value
+        if level not in report["mase"]:
+            continue
+        flat[f"eval/mase_{level}_gini"] = report["mase"][level]["gini"]
+        flat[f"eval/mase_{level}_unweighted_mean"] = report["mase"][level][
+            "unweighted_mean"
+        ]
     wandb_run.log(flat, step=step)
 
 
-def sample_eval_rows(index: wi.WindowIndex, n: int, seed: int):
+def sample_eval_rows(index: wi.WindowIndex, n: int, seed: int = EVAL_SEED):
+    """A fixed (seed defaults to the module-level EVAL_SEED, not the current
+    step) natural-mixture sample: dataset representation follows the val
+    split's real, imbalanced proportions. Used for the pooled global metric,
+    which is only informative relative to the unweighted per-source mean if
+    it reflects the corpus's actual mixture rather than a rebalanced one --
+    see the plan's "Dispersion and equity metrics" section. Not reliable for
+    per-source breakdowns on its own: a dataset with few validation windows
+    can easily draw zero in a given sample (see
+    sample_stratified_eval_rows)."""
     val = index.split("val")
     if len(val) == 0:
         raise ValueError(
             "val split is empty; lower window_index.val_series_fraction is too small"
         )
     return val.sample(n=min(n, len(val)), random_state=seed)
+
+
+def sample_stratified_eval_rows(
+    index: wi.WindowIndex, n_per_dataset: int, seed: int = EVAL_SEED
+) -> pd.DataFrame:
+    """A fixed sample with up to `n_per_dataset` windows from EVERY dataset in
+    the val split (fewer if a dataset's val pool is smaller), regardless of
+    each dataset's natural size. Exists because the natural-mixture sample
+    from `sample_eval_rows` can have a high probability of containing zero
+    windows from a small dataset -- e.g. one real dataset in this corpus had
+    only 7 total validation windows out of ~29,000, giving a ~61% chance of
+    zero representation in a 2048-window natural sample (see
+    notes/agentic_logs). Used only for the per-source Gini/unweighted-mean
+    breakdown, never for the pooled global metric, since rebalancing there
+    would make the pooled-vs-unweighted-mean comparison vacuous."""
+    val = index.split("val")
+    if len(val) == 0:
+        raise ValueError(
+            "val split is empty; lower window_index.val_series_fraction is too small"
+        )
+    parts = [
+        group.sample(n=min(n_per_dataset, len(group)), random_state=seed)
+        for _, group in val.groupby("dataset", sort=False)
+    ]
+    return pd.concat(parts)
 
 
 def run_moment(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
@@ -153,7 +260,23 @@ def run_moment(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
         cfg.scale_assignment if cfg.experiment_kind == "controlled_scale" else None
     )
 
+    # Fixed once for the whole run (see EVAL_SEED) so every checkpoint's
+    # metrics are comparable to every other checkpoint's, and so paired
+    # conditions evaluate on identical eval windows too.
+    pooled_eval_rows = sample_eval_rows(
+        index, cfg.train.eval_batches * cfg.train.batch_size
+    )
+    # No scale_assignment: the controlled scale b is a TRAINING-time
+    # intervention, so every arm is evaluated on identical natural-scale
+    # windows. Kept on CPU and moved chunk by chunk (see eval_scale_free).
+    pooled_eval_batch = ma.make_batch(index, pooled_eval_rows, cache)
+    strat_eval_rows = sample_stratified_eval_rows(
+        index, cfg.train.eval_windows_per_dataset
+    )
+    strat_eval_batch = ma.make_batch(index, strat_eval_rows, cache)
+
     counter = windows_processed_counter()
+    optimization = {"steps_attempted": 0, "steps_skipped": 0}
     history = {"step": [], "pooled_mse": [], "reports": []}
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -171,6 +294,8 @@ def run_moment(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
         metrics = ma.training_step_metrics(
             model, batch, cfg.condition, optimizer, model_cfg.grad_clip_norm
         )
+        optimization["steps_attempted"] += 1
+        optimization["steps_skipped"] += int(metrics["step_skipped"])
         update_windows_processed(counter, rows)
 
         wandb_run.log(
@@ -179,6 +304,7 @@ def run_moment(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
                 "train/grad_norm_before_clip": metrics["grad_norm_before_clip"],
                 "train/grad_norm_after_clip": metrics["grad_norm_after_clip"],
                 "train/clipped": float(metrics["clipped"]),
+                "train/step_skipped": float(metrics["step_skipped"]),
                 "train/masked_mse": float(
                     np.mean(
                         metrics[
@@ -196,25 +322,29 @@ def run_moment(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
         )
 
         if step % cfg.train.eval_every == 0 or step == cfg.train.steps:
-            eval_rows = sample_eval_rows(
-                index, cfg.train.eval_batches * cfg.train.batch_size, seed=step
+            # Evaluation is always scale-free (nMSE primary, MASE secondary)
+            # regardless of which space `condition` optimizes in, so both arms
+            # are scored on identical definitions -- see results.tex, which
+            # reports nMSE throughout.
+            pooled_nmse, pooled_mase = eval_scale_free(
+                ma.forward, model, pooled_eval_batch, cfg.condition, cfg.device
             )
-            eval_batch = ma.make_batch(
-                index,
-                eval_rows,
-                cache,
-                scale_assignment=scale_assignment,
-                b_low=cfg.scale_b_low,
-                b_high=cfg.scale_b_high,
-            ).to(cfg.device)
-            with torch.no_grad():
-                eval_out = ma.forward(model, eval_batch, cfg.condition)
-            per_example = eval_out.per_example_loss_masked.cpu().numpy()
-            report = dispersion_report(per_example, eval_rows)
+            strat_error, strat_mase = eval_scale_free(
+                ma.forward, model, strat_eval_batch, cfg.condition, cfg.device
+            )
+            report = {
+                "pooled_global_error": L.pooled_mean(pooled_nmse),
+                "pooled_mase": L.pooled_mean(pooled_mase),
+                **source_breakdown(strat_error, strat_eval_rows),
+                "mase": source_breakdown(strat_mase, strat_eval_rows),
+            }
             log_dispersion(wandb_run, report, step)
             history["step"].append(step)
             history["pooled_mse"].append(report["pooled_global_error"])
             history["reports"].append(report)
+            (out_dir / "history.json").write_text(
+                json.dumps(history, indent=2, default=str)
+            )
             for level in ("dataset", "domain", "frequency"):
                 wandb_run.log(
                     {f"exposure/{level}_windows_processed_n": len(counter[level])},
@@ -226,9 +356,8 @@ def run_moment(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
                 out_dir / f"checkpoint_step{step}.pt", model, optimizer, step
             )
 
-    summary = finalize_summary(history, counter, cfg)
+    summary = finalize_summary(history, counter, cfg, optimization)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    (out_dir / "history.json").write_text(json.dumps(history, indent=2, default=str))
     return summary
 
 
@@ -259,7 +388,25 @@ def run_timesfm(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
         cfg.scale_assignment if cfg.experiment_kind == "controlled_scale" else None
     )
 
+    # Fixed once for the whole run (see EVAL_SEED) so every checkpoint's
+    # metrics are comparable to every other checkpoint's, and so paired
+    # conditions evaluate on identical eval windows too.
+    pooled_eval_rows = sample_eval_rows(
+        index, cfg.train.eval_batches * cfg.train.batch_size
+    )
+    # Natural scale only: b is a training-time intervention (see run_moment).
+    pooled_eval_batch = tm.make_batch(
+        index, pooled_eval_rows, cache, model_config.horizon_len
+    )
+    strat_eval_rows = sample_stratified_eval_rows(
+        index, cfg.train.eval_windows_per_dataset
+    )
+    strat_eval_batch = tm.make_batch(
+        index, strat_eval_rows, cache, model_config.horizon_len
+    )
+
     counter = windows_processed_counter()
+    optimization = {"steps_attempted": 0, "steps_skipped": 0}
     history = {"step": [], "pooled_mse": [], "reports": []}
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -276,8 +423,16 @@ def run_timesfm(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
             b_high=cfg.scale_b_high,
         ).to(cfg.device)
         metrics = tm.training_step_metrics(
-            model, batch, cfg.condition, optimizer, cfg.timesfm.grad_clip_norm
+            model,
+            batch,
+            cfg.condition,
+            cfg.timesfm.normalization_mode,
+            cfg.timesfm.objective,
+            optimizer,
+            cfg.timesfm.grad_clip_norm,
         )
+        optimization["steps_attempted"] += 1
+        optimization["steps_skipped"] += int(metrics["step_skipped"])
         update_windows_processed(counter, rows)
 
         wandb_run.log(
@@ -286,7 +441,7 @@ def run_timesfm(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
                 "train/mse": float(np.mean(metrics["mse_per_example"])),
                 "train/pinball": float(np.mean(metrics["pinball_per_example"])),
                 "train/mse_to_pinball_loss_ratio": metrics["mse_to_pinball_loss_ratio"],
-                "train/mse_grad_norm": metrics["mse_grad_norm"],
+                "train/output_head_grad_norm": metrics["output_head_grad_norm"],
                 "train/total_grad_norm_before_clip": metrics[
                     "total_grad_norm_before_clip"
                 ],
@@ -294,31 +449,43 @@ def run_timesfm(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
                     "total_grad_norm_after_clip"
                 ],
                 "train/clipped": float(metrics["clipped"]),
+                "train/step_skipped": float(metrics["step_skipped"]),
+                "train/degenerate_frac": metrics["degenerate_frac"],
             },
             step=step,
         )
 
         if step % cfg.train.eval_every == 0 or step == cfg.train.steps:
-            eval_rows = sample_eval_rows(
-                index, cfg.train.eval_batches * cfg.train.batch_size, seed=step
+            # Scale-free evaluation regardless of `condition`; see run_moment.
+            pooled_nmse, pooled_mase = eval_scale_free(
+                tm.forward,
+                model,
+                pooled_eval_batch,
+                cfg.condition,
+                cfg.device,
+                {"normalization_mode": cfg.timesfm.normalization_mode},
             )
-            eval_batch = tm.make_batch(
-                index,
-                eval_rows,
-                cache,
-                model_config.horizon_len,
-                scale_assignment=scale_assignment,
-                b_low=cfg.scale_b_low,
-                b_high=cfg.scale_b_high,
-            ).to(cfg.device)
-            with torch.no_grad():
-                eval_out = tm.forward(model, eval_batch, cfg.condition)
-            per_example = eval_out.mse_per_example.cpu().numpy()
-            report = dispersion_report(per_example, eval_rows)
+            strat_error, strat_mase = eval_scale_free(
+                tm.forward,
+                model,
+                strat_eval_batch,
+                cfg.condition,
+                cfg.device,
+                {"normalization_mode": cfg.timesfm.normalization_mode},
+            )
+            report = {
+                "pooled_global_error": L.pooled_mean(pooled_nmse),
+                "pooled_mase": L.pooled_mean(pooled_mase),
+                **source_breakdown(strat_error, strat_eval_rows),
+                "mase": source_breakdown(strat_mase, strat_eval_rows),
+            }
             log_dispersion(wandb_run, report, step)
             history["step"].append(step)
             history["pooled_mse"].append(report["pooled_global_error"])
             history["reports"].append(report)
+            (out_dir / "history.json").write_text(
+                json.dumps(history, indent=2, default=str)
+            )
             for level in ("dataset", "domain", "frequency"):
                 wandb_run.log(
                     {f"exposure/{level}_windows_processed_n": len(counter[level])},
@@ -330,26 +497,162 @@ def run_timesfm(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
                 out_dir / f"checkpoint_step{step}.pt", model, optimizer, step
             )
 
-    summary = finalize_summary(history, counter, cfg)
+    summary = finalize_summary(history, counter, cfg, optimization)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    (out_dir / "history.json").write_text(json.dumps(history, indent=2, default=str))
     return summary
 
 
-def finalize_summary(history: dict, counter: dict, cfg: DictConfig) -> dict:
+def run_chronos2(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
+    if cfg.condition not in ca.CONDITIONS:
+        raise ValueError(f"condition must be one of {ca.CONDITIONS}")
+    model_config = ca.Chronos2Config(
+        **OmegaConf.to_container(cfg.chronos2, resolve=True)
+    )
+    if model_config.context_length != cfg.window_index.context_length:
+        raise ValueError(
+            "chronos2.context_length must equal window_index.context_length"
+        )
+    if model_config.prediction_length != cfg.window_index.prediction_length:
+        raise ValueError(
+            "chronos2.prediction_length must equal window_index.prediction_length"
+        )
+
+    dataset_weights = resolve_dataset_weights(cfg, index)
+    model = ca.build_chronos2_model(model_config, seed=cfg.seed).to(cfg.device)
+    optimizer = OPTIMIZERS[cfg.train.optimizer](model.parameters(), lr=cfg.train.lr)
+    cache = wi.SeriesCache(index.corpus_root)
+    schedule = wi.build_batch_schedule(
+        index,
+        "train",
+        dataset_weights,
+        cfg.train.steps,
+        cfg.train.batch_size,
+        cfg.train.schedule_seed,
+    )
+    train_table = index.split("train").reset_index(drop=True)
+    scale_assignment = (
+        cfg.scale_assignment if cfg.experiment_kind == "controlled_scale" else None
+    )
+
+    pooled_eval_rows = sample_eval_rows(
+        index, cfg.train.eval_batches * cfg.train.batch_size
+    )
+    pooled_eval_batch = ca.make_batch(index, pooled_eval_rows, cache)
+    strat_eval_rows = sample_stratified_eval_rows(
+        index, cfg.train.eval_windows_per_dataset
+    )
+    strat_eval_batch = ca.make_batch(index, strat_eval_rows, cache)
+
+    counter = windows_processed_counter()
+    optimization = {"steps_attempted": 0, "steps_skipped": 0}
+    history = {"step": [], "pooled_mse": [], "reports": []}
+    out_dir = Path(cfg.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for step in range(1, cfg.train.steps + 1):
+        rows = train_table.iloc[schedule[step - 1]]
+        batch = ca.make_batch(
+            index,
+            rows,
+            cache,
+            scale_assignment=scale_assignment,
+            b_low=cfg.scale_b_low,
+            b_high=cfg.scale_b_high,
+        ).to(cfg.device)
+        metrics = ca.training_step_metrics(
+            model,
+            batch,
+            cfg.condition,
+            optimizer,
+            model_config.grad_clip_norm,
+        )
+        optimization["steps_attempted"] += 1
+        optimization["steps_skipped"] += int(metrics["step_skipped"])
+        update_windows_processed(counter, rows)
+
+        wandb_run.log(
+            {
+                "train/loss": metrics["loss"],
+                "train/output_head_grad_norm": metrics["output_head_grad_norm"],
+                "train/total_grad_norm_before_clip": metrics[
+                    "total_grad_norm_before_clip"
+                ],
+                "train/total_grad_norm_after_clip": metrics[
+                    "total_grad_norm_after_clip"
+                ],
+                "train/clipped": float(metrics["clipped"]),
+                "train/step_skipped": float(metrics["step_skipped"]),
+                "train/degenerate_frac": metrics["degenerate_frac"],
+            },
+            step=step,
+        )
+
+        if step % cfg.train.eval_every == 0 or step == cfg.train.steps:
+            pooled_nmse, pooled_mase = eval_scale_free(
+                ca.forward,
+                model,
+                pooled_eval_batch,
+                cfg.condition,
+                cfg.device,
+            )
+            strat_error, strat_mase = eval_scale_free(
+                ca.forward,
+                model,
+                strat_eval_batch,
+                cfg.condition,
+                cfg.device,
+            )
+            report = {
+                "pooled_global_error": L.pooled_mean(pooled_nmse),
+                "pooled_mase": L.pooled_mean(pooled_mase),
+                **source_breakdown(strat_error, strat_eval_rows),
+                "mase": source_breakdown(strat_mase, strat_eval_rows),
+            }
+            log_dispersion(wandb_run, report, step)
+            history["step"].append(step)
+            history["pooled_mse"].append(report["pooled_global_error"])
+            history["reports"].append(report)
+            (out_dir / "history.json").write_text(
+                json.dumps(history, indent=2, default=str)
+            )
+            for level in ("dataset", "domain", "frequency"):
+                wandb_run.log(
+                    {f"exposure/{level}_windows_processed_n": len(counter[level])},
+                    step=step,
+                )
+
+        if step % cfg.train.checkpoint_every == 0 or step == cfg.train.steps:
+            save_checkpoint(
+                out_dir / f"checkpoint_step{step}.pt", model, optimizer, step
+            )
+
+    summary = finalize_summary(history, counter, cfg, optimization)
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    return summary
+
+
+def finalize_summary(
+    history: dict, counter: dict, cfg: DictConfig, optimization: dict
+) -> dict:
     steps = np.array(history["step"])
     mse = np.array(history["pooled_mse"])
     summary = {
         "windows_processed": counter,
+        "optimization": {
+            **optimization,
+            "updates_applied": optimization["steps_attempted"]
+            - optimization["steps_skipped"],
+        },
         "final_pooled_mse": float(mse[-1]) if mse.size else None,
         "moment_revision": ma.MOMENT_REVISION if cfg.model == "moment" else None,
         "timesfm_revision": tm.TIMESFM_REVISION if cfg.model == "timesfm" else None,
+        "chronos2_revision": (
+            ca.CHRONOS2_REVISION if cfg.model == "chronos2" else None
+        ),
     }
-    if steps.size >= 2:
-        cutoff = min(L.TROUGH_STEP_CUTOFF, int(steps.max()))
-        summary["log_mse_auc_through_2000"] = L.log_mse_auc(
-            steps, mse, cutoff_step=cutoff
-        )
+    early = steps <= L.TROUGH_STEP_CUTOFF
+    if early.sum() >= 2:
+        summary["log_mse_auc_through_2000"] = L.log_mse_auc(steps, mse)
     return summary
 
 
@@ -377,6 +680,9 @@ def load_checkpoint(
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="tsfm_moment")
 def main(cfg: DictConfig) -> None:
+    if cfg.train.deterministic:
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.benchmark = False
     torch.manual_seed(cfg.seed)
     index = resolve_window_index(cfg)
 
@@ -425,6 +731,7 @@ def main(cfg: DictConfig) -> None:
                 "n_val": len(index.split("val")),
                 "config": OmegaConf.to_container(cfg.window_index, resolve=True),
                 "windows_per_dataset": index.table["dataset"].value_counts().to_dict(),
+                "dataset_scale_groups": index.dataset_scale_groups(),
                 "zero_window_datasets": zero_window_datasets,
             },
             indent=2,
@@ -442,6 +749,8 @@ def main(cfg: DictConfig) -> None:
         summary = run_moment(cfg, index, wandb_run)
     elif cfg.model == "timesfm":
         summary = run_timesfm(cfg, index, wandb_run)
+    elif cfg.model == "chronos2":
+        summary = run_chronos2(cfg, index, wandb_run)
     else:
         raise ValueError(f"unknown model {cfg.model!r}")
     summary["wall_clock_seconds"] = time.time() - start

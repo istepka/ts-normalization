@@ -132,9 +132,10 @@ def make_batch(
 
     If `scale_assignment` is given ('A' or 'B'), each window's context is
     rescaled by its assigned scale-swap factor (applied in original space,
-    before any RevIN normalization inside the model, per the plan's "Scale
-    intervention" section) around its own context mean, so context_std scales
-    by exactly `b` while the normalized shape is unchanged.
+    before any RevIN normalization inside the model. The raw context is first
+    standardized with its stored causal context statistics and then multiplied
+    by `b`. This isolates the controlled scale from raw levels and avoids
+    float32 cancellation on large-valued series.
     """
     context_length = window_index.config.context_length
     contexts = np.zeros((len(rows), context_length), dtype=np.float32)
@@ -149,7 +150,9 @@ def make_batch(
         if scale_assignment is not None:
             b = window_index.scale_for(row, scale_assignment, b_low, b_high)
             mean = row["context_mean"]
-            context = mean + b * (context - mean)
+            std = row["context_std"]
+            context[valid] = b * (context[valid] - mean) / std
+            context[~valid] = 0.0
             scales[i] = b
         contexts[i] = context
         masks[i] = valid
@@ -176,6 +179,7 @@ class MomentForwardResult:
     )  # [B], same space, evaluated over ALL positions
     normalized_mse: torch.Tensor  # [B], masked, always in normalized space
     original_mse: torch.Tensor  # [B], masked, always in original space
+    mase: torch.Tensor  # [B], masked original-space MAE / seasonal-naive MAE
     reconstruction: torch.Tensor  # [B, 1, context_length], original space
     pretrain_mask: torch.Tensor  # [B, context_length], 0 = reconstructed position
 
@@ -223,11 +227,25 @@ def forward(model: MOMENT, batch: MomentBatch, condition: str) -> MomentForwardR
 
     per_example = normalized_mse if condition == "moment_normalized" else original_mse
 
+    # MASE numerator and denominator both live in the original space, so the
+    # controlled scale multiplier cancels and the metric stays comparable
+    # across scale assignments and across conditions.
+    original_mae = L.masked_mae(
+        out.reconstruction, batch.x_enc, train_mask, reduction="none"
+    )
+    periods = torch.as_tensor(
+        [L.seasonal_period(f) for f in batch.frequency],
+        device=batch.x_enc.device,
+    )
+    naive_mae = L.seasonal_naive_mae(batch.x_enc.squeeze(1), batch.input_mask, periods)
+    mase = original_mae / naive_mae
+
     return MomentForwardResult(
         per_example_loss_masked=per_example,
         per_example_loss_unmasked=unmasked_mse,
         normalized_mse=normalized_mse,
         original_mse=original_mse,
+        mase=mase,
         reconstruction=out.reconstruction,
         pretrain_mask=out.pretrain_mask,
     )
@@ -252,7 +270,9 @@ def training_step_metrics(
     grad_norm_before = L.grad_norm(model.parameters())
     clipped = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
     grad_norm_after = L.grad_norm(model.parameters())
-    optimizer.step()
+    step_skipped = not torch.isfinite(clipped)
+    if not step_skipped:
+        optimizer.step()
 
     return {
         "loss": float(loss.detach()),
@@ -267,6 +287,7 @@ def training_step_metrics(
         "grad_norm_before_clip": grad_norm_before,
         "grad_norm_after_clip": grad_norm_after,
         "clipped": bool(float(clipped) > grad_clip_norm),
+        "step_skipped": bool(step_skipped),
         "dataset": batch.dataset,
         "domain": batch.domain,
         "frequency": batch.frequency,

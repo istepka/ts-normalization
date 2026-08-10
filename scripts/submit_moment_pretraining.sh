@@ -23,6 +23,10 @@ export PREDICTION_LENGTH=${PREDICTION_LENGTH:-128}
 export INDEX=${INDEX:-outputs/gifteval_window_index/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
 export STEPS=${STEPS:-30000}
 export BATCH_SIZE=${BATCH_SIZE:-512}
+export CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-2000}
+export EVAL_EVERY=${EVAL_EVERY:-250}
+export EVAL_BATCHES=${EVAL_BATCHES:-50}
+export EVAL_WINDOWS_PER_DATASET=${EVAL_WINDOWS_PER_DATASET:-64}
 export OUTPUT="${INDEX}"
 
 DEPENDENCY_ARGS=()
@@ -34,7 +38,7 @@ if [ ! -f "${INDEX}" ]; then
 fi
 
 ARRAY_JOB=$(sbatch --parsable "${DEPENDENCY_ARGS[@]}" scripts/run_moment_pretraining.sbatch)
-echo "array job: ${ARRAY_JOB} (6 tasks, steps=${STEPS}, batch_size=${BATCH_SIZE})"
+echo "array job: ${ARRAY_JOB} (6 tasks, steps=${STEPS}, batch_size=${BATCH_SIZE}, checkpoint_every=${CHECKPOINT_EVERY})"
 
 export JOBTAG="gifteval_moment_${ARRAY_JOB}"
 AGG_JOB=$(sbatch --parsable \

@@ -4,6 +4,7 @@ exercised separately by the Phase 2/5 smoke tests (see notes/agentic_logs)."""
 
 from pathlib import Path
 
+import pytest
 from omegaconf import OmegaConf
 
 import wandb
@@ -16,9 +17,11 @@ def _base_cfg(tiny_corpus, tmp_path, model: str) -> OmegaConf:
         {
             "model": model,
             "device": "cpu",
-            "condition": "moment_original"
-            if model == "moment"
-            else "timesfm_native_original",
+            "condition": {
+                "moment": "moment_original",
+                "timesfm": "timesfm_native_original",
+                "chronos2": "chronos2_normalized",
+            }[model],
             "experiment_kind": "natural_mixture",
             "scale_assignment": None,
             "scale_b_low": 1.0,
@@ -49,15 +52,37 @@ def _base_cfg(tiny_corpus, tmp_path, model: str) -> OmegaConf:
                 "dropout": 0.1,
                 "grad_clip_norm": 1.0,
             },
-            "timesfm": {"config_size": "17m", "grad_clip_norm": 1.0},
+            "timesfm": {
+                "config_size": "17m",
+                "grad_clip_norm": 1.0,
+                "normalization_mode": "first_patch",
+                "objective": "combined",
+            },
+            "chronos2": {
+                "context_length": 64,
+                "prediction_length": 32,
+                "patch_size": 16,
+                "d_model": 32,
+                "d_kv": 8,
+                "d_ff": 64,
+                "num_layers": 2,
+                "num_heads": 4,
+                "dropout_rate": 0.0,
+                "initializer_factor": 0.05,
+                "quantiles": [0.1, 0.5, 0.9],
+                "use_arcsinh": True,
+                "grad_clip_norm": 1.0,
+            },
             "train": {
                 "steps": 4,
                 "batch_size": 4,
                 "lr": 1e-4,
                 "optimizer": "sgd",
+                "deterministic": True,
                 "schedule_seed": 0,
                 "eval_every": 2,
                 "eval_batches": 1,
+                "eval_windows_per_dataset": 2,
                 "checkpoint_every": 4,
             },
             "wandb": {
@@ -97,6 +122,10 @@ def test_run_timesfm_end_to_end(tiny_corpus, tmp_path):
     cfg.window_index.context_length = 64
     cfg.window_index.prediction_length = 128
     cfg.window_index.stride = 200
+    cfg.experiment_kind = "controlled_scale"
+    cfg.scale_assignment = "A"
+    cfg.timesfm.normalization_mode = "whole_context"
+    cfg.timesfm.objective = "mse"
     index = train_mod.resolve_window_index(cfg, tiny_corpus[1])
     run = wandb.init(mode="disabled")
     summary = train_mod.run_timesfm(cfg, index, run)
@@ -105,6 +134,41 @@ def test_run_timesfm_end_to_end(tiny_corpus, tmp_path):
     assert summary["timesfm_revision"] is not None
     assert set(summary["windows_processed"]["dataset"]) <= {"synth_a", "synth_b"}
     assert (Path(cfg.output_dir) / "checkpoint_step4.pt").is_file()
+
+
+def test_run_chronos2_end_to_end(tiny_corpus, tmp_path):
+    cfg = _base_cfg(tiny_corpus, tmp_path, "chronos2")
+    cfg.experiment_kind = "controlled_scale"
+    cfg.scale_assignment = "A"
+    index = train_mod.resolve_window_index(cfg, tiny_corpus[1])
+    run = wandb.init(mode="disabled")
+    summary = train_mod.run_chronos2(cfg, index, run)
+    run.finish()
+
+    assert summary["chronos2_revision"] == "chronos-forecasting==2.3.1"
+    assert set(summary["windows_processed"]["dataset"]) <= {
+        "synth_a",
+        "synth_b",
+    }
+    assert (Path(cfg.output_dir) / "checkpoint_step4.pt").is_file()
+
+
+def test_history_is_persisted_before_summary_finalization(
+    tiny_corpus, tmp_path, monkeypatch
+):
+    cfg = _base_cfg(tiny_corpus, tmp_path, "moment")
+    index = train_mod.resolve_window_index(cfg, tiny_corpus[1])
+
+    def fail_finalization(*args, **kwargs):
+        raise RuntimeError("forced finalization failure")
+
+    monkeypatch.setattr(train_mod, "finalize_summary", fail_finalization)
+    run = wandb.init(mode="disabled")
+    with pytest.raises(RuntimeError, match="forced finalization failure"):
+        train_mod.run_moment(cfg, index, run)
+    run.finish()
+
+    assert (Path(cfg.output_dir) / "history.json").is_file()
 
 
 def test_dataset_weights_must_cover_every_present_dataset(tiny_corpus, tmp_path):
@@ -117,3 +181,30 @@ def test_dataset_weights_must_cover_every_present_dataset(tiny_corpus, tmp_path)
         assert "synth_b" in str(e)
     else:
         raise AssertionError("expected ValueError for incomplete dataset_weights")
+
+
+def test_finalize_summary_omits_early_auc_for_sparse_eval_schedule():
+    history = {
+        "step": [2000, 4000],
+        "pooled_mse": [2.0, 1.0],
+    }
+    cfg = OmegaConf.create({"model": "timesfm"})
+    optimization = {"steps_attempted": 4000, "steps_skipped": 0}
+
+    summary = train_mod.finalize_summary(history, {}, cfg, optimization)
+
+    assert summary["final_pooled_mse"] == 1.0
+    assert "log_mse_auc_through_2000" not in summary
+
+
+def test_finalize_summary_keeps_early_auc_when_two_points_are_available():
+    history = {
+        "step": [1000, 2000, 4000],
+        "pooled_mse": [4.0, 2.0, 1.0],
+    }
+    cfg = OmegaConf.create({"model": "timesfm"})
+    optimization = {"steps_attempted": 4000, "steps_skipped": 0}
+
+    summary = train_mod.finalize_summary(history, {}, cfg, optimization)
+
+    assert "log_mse_auc_through_2000" in summary

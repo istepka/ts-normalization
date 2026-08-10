@@ -21,10 +21,9 @@ index table, for the same storage reason documented in gifteval_corpus.py: the
 positions are already fully determined by `(dataset, series_id, window_start)` and
 duplicating them for tens of millions of windows would be pure overhead.
 
-Series-level train/val split and the scale-swap A/B complement partition are both
-derived the same way: a stable hash of `(base_seed, salt, dataset, series_id[,
-window_start])` compared against a threshold. This makes both partitions exact,
-reproducible, and free of any stored permutation state.
+The train/validation split is derived from a stable series-level hash. The
+scale-swap A/B partition is balanced across datasets so each dataset has one
+controlled scale in A and the opposite scale in B.
 """
 
 import hashlib
@@ -103,6 +102,14 @@ class WindowIndex:
         self.table = table
         self.config = config
         self.corpus_root = Path(corpus_root)
+        datasets = sorted(
+            table["dataset"].unique(),
+            key=lambda dataset: stable_seed(config.base_seed, "dataset_scale", dataset),
+        )
+        split = len(datasets) // 2
+        self._dataset_scale_group = {
+            dataset: int(i >= split) for i, dataset in enumerate(datasets)
+        }
 
     def __len__(self) -> int:
         return len(self.table)
@@ -111,6 +118,10 @@ class WindowIndex:
         if name not in ("train", "val"):
             raise ValueError(f"unknown split {name!r}")
         return self.table[self.table["split"] == name]
+
+    def dataset_scale_groups(self) -> dict[str, int]:
+        """Stable balanced dataset groups used by controlled A/B runs."""
+        return dict(self._dataset_scale_group)
 
     def window_values(self, row: pd.Series, cache: SeriesCache) -> np.ndarray:
         target = cache.target(row["dataset"], row["series_id"])
@@ -132,15 +143,15 @@ class WindowIndex:
     ) -> float:
         """Scale factor for this window under assignment 'A' or 'B'.
 
-        Assignment A: scale_group 0 -> b_low, scale_group 1 -> b_high.
-        Assignment B swaps every window's scale while leaving scale_group (and
-        therefore every other property of the window) untouched, so A and B are
-        exact complements by construction.
+        Assignment A maps dataset group 0 to b_low and group 1 to b_high.
+        Assignment B swaps every dataset's scale. Dataset groups are ordered by
+        a stable hash and differ in size by at most one.
         """
         if assignment not in ("A", "B"):
             raise ValueError(f"unknown scale assignment {assignment!r}")
         low_group = 0 if assignment == "A" else 1
-        return b_low if int(row["scale_group"]) == low_group else b_high
+        group = self._dataset_scale_group[str(row["dataset"])]
+        return b_low if group == low_group else b_high
 
     def save(self, path: Path) -> None:
         path = Path(path)
@@ -161,9 +172,9 @@ class WindowIndex:
         # val fraction, ...) are already fully baked into the cached rows.
         cached_context = table["context_length"].unique()
         cached_prediction = table["prediction_length"].unique()
-        if list(cached_context) != [config.context_length] or list(cached_prediction) != [
-            config.prediction_length
-        ]:
+        if list(cached_context) != [config.context_length] or list(
+            cached_prediction
+        ) != [config.prediction_length]:
             raise ValueError(
                 f"cached window index at {path} was built with "
                 f"context_length={list(cached_context)}, "
@@ -210,10 +221,24 @@ def build_batch_schedule(
     weights = np.array([dataset_weights[d] for d in datasets_present], dtype=np.float64)
     weights = weights / weights.sum()
 
-    series_positions: dict[str, dict[str, np.ndarray]] = {
-        dataset: {sid: sub.index.to_numpy() for sid, sub in group.groupby("series_id")}
-        for dataset, group in table.groupby("dataset")
-    }
+    # Per dataset: a CSR-style ragged structure (all row positions grouped by
+    # series, concatenated, plus each series' start offset into that
+    # concatenation) so a whole dataset's worth of draws can be resolved with
+    # a handful of vectorized numpy calls instead of a Python loop per draw.
+    # At full-corpus scale (steps * batch_size can be in the tens of
+    # millions, and a single dataset like buildings_900k has ~1.8M series) a
+    # per-draw Python loop measurably does not finish in reasonable time --
+    # see notes/agentic_logs.
+    series_layout: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    for dataset, group in table.groupby("dataset", sort=False):
+        row_positions = group.index.to_numpy()
+        order = np.argsort(group["series_id"].to_numpy(), kind="stable")
+        sorted_positions = row_positions[order]
+        _, counts_per_series = np.unique(
+            group["series_id"].to_numpy()[order], return_counts=True
+        )
+        offsets = np.concatenate(([0], np.cumsum(counts_per_series)))[:-1]
+        series_layout[dataset] = (sorted_positions, offsets, counts_per_series)
 
     rng = np.random.default_rng(schedule_seed)
     n = steps * batch_size
@@ -224,14 +249,11 @@ def build_batch_schedule(
         count = int(draw_mask.sum())
         if count == 0:
             continue
-        series_map = series_positions[dataset]
-        series_ids = list(series_map.keys())
-        series_choice = rng.integers(0, len(series_ids), size=count)
-        picks = np.empty(count, dtype=np.int64)
-        for i, s_idx in enumerate(series_choice):
-            positions = series_map[series_ids[s_idx]]
-            picks[i] = positions[rng.integers(0, len(positions))]
-        schedule[draw_mask] = picks
+        sorted_positions, offsets, counts_per_series = series_layout[dataset]
+        series_choice = rng.integers(0, len(counts_per_series), size=count)
+        local_idx = rng.integers(0, counts_per_series[series_choice])
+        global_idx = offsets[series_choice] + local_idx
+        schedule[draw_mask] = sorted_positions[global_idx]
     return schedule.reshape(steps, batch_size)
 
 
@@ -245,16 +267,6 @@ def _series_split(
     )
 
 
-def _series_scale_group(
-    base_seed: int, dataset: str, frequency: str, series_id: str
-) -> int:
-    return (
-        0
-        if unit_interval(base_seed, "scale", dataset, frequency, series_id) < 0.5
-        else 1
-    )
-
-
 def build_window_index(
     corpus_root: Path,
     dataset_names: list[str],
@@ -265,7 +277,7 @@ def build_window_index(
 
     Splits series into train/val before creating windows (no series appears in
     both), skips windows with more missing values than `min_valid_fraction`
-    allows, and assigns each surviving series to a scale-swap complement group.
+    allows. Dataset-level scale groups are derived when WindowIndex is created.
     """
     corpus_root = Path(corpus_root)
     window_length = config.context_length + config.prediction_length
@@ -297,10 +309,6 @@ def build_window_index(
                 split = _series_split(
                     config.base_seed, name, series_id, config.val_series_fraction
                 )
-                scale_group = _series_scale_group(
-                    config.base_seed, name, frequency, series_id
-                )
-
                 starts = list(range(0, n - window_length + 1, config.stride))
                 if config.max_windows_per_series is not None:
                     starts = starts[: config.max_windows_per_series]
@@ -337,7 +345,6 @@ def build_window_index(
                             "aug_seed": stable_seed(
                                 config.base_seed, "aug", name, series_id, window_start
                             ),
-                            "scale_group": scale_group,
                             "split": split,
                         }
                     )

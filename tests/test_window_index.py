@@ -43,6 +43,21 @@ def test_scale_assignments_are_exact_complements(tiny_corpus):
         assert a != b
 
 
+def test_scale_assignments_are_balanced_at_dataset_level(tiny_corpus):
+    index = _build_index(tiny_corpus)
+    scales = {}
+    for dataset, rows in index.table.groupby("dataset"):
+        assigned = {
+            index.scale_for(row, "A", b_low=1.0, b_high=10.0)
+            for _, row in rows.iterrows()
+        }
+        assert len(assigned) == 1
+        scales[dataset] = assigned.pop()
+
+    counts = np.unique(list(scales.values()), return_counts=True)[1]
+    assert counts.max() - counts.min() <= 1
+
+
 def test_replaying_a_seed_reproduces_identical_masking_randomness(tiny_corpus):
     index = _build_index(tiny_corpus)
     row = index.table.iloc[0]

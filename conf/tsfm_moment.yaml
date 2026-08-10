@@ -51,10 +51,25 @@ train:
   batch_size: 32
   lr: 1.0e-4
   optimizer: adamw
+  deterministic: true
   schedule_seed: 0
-  eval_every: 100
-  eval_batches: 4
-  checkpoint_every: 500
+  eval_every: 250
+  # eval_batches * batch_size windows, natural-mixture proportion (fixed
+  # across every checkpoint, see EVAL_SEED in train.py) -> feeds only the
+  # pooled_global_error metric.
+  eval_batches: 50
+  # Up to this many windows from EVERY dataset in the val split (fewer if a
+  # dataset's val pool is smaller), fixed across every checkpoint -> feeds
+  # only the per-source Gini/unweighted-mean breakdown, so a dataset with few
+  # validation windows isn't at the mercy of the natural-mixture sample's
+  # (possibly high) probability of drawing zero of them. See train.py's
+  # sample_stratified_eval_rows / notes/agentic_logs.
+  eval_windows_per_dataset: 64
+  # Insurance: cheap enough in disk (a handful of checkpoints per run, not
+  # dozens) to keep, but frequent enough that a later change of mind about
+  # validation sampling / metrics can be recomputed from a saved checkpoint
+  # instead of re-running the full (expensive) training run.
+  checkpoint_every: 2000
 
 wandb:
   entity: ts-normalization

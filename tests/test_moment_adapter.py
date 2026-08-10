@@ -102,7 +102,7 @@ def test_controlled_scale_gradient_ratio_matches_b_squared():
             input_mask=mask,
             dataset=np.array(["x"] * 4),
             domain=np.array(["x"] * 4),
-            frequency=np.array(["x"] * 4),
+            frequency=np.array(["H"] * 4),
             scale=torch.full((4,), b),
             batch_seed=123,
         )
@@ -141,7 +141,7 @@ def test_normalized_space_removes_scale_dependence():
             input_mask=mask,
             dataset=np.array(["x"] * 4),
             domain=np.array(["x"] * 4),
-            frequency=np.array(["x"] * 4),
+            frequency=np.array(["H"] * 4),
             scale=torch.full((4,), b),
             batch_seed=123,
         )

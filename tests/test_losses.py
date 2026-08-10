@@ -66,3 +66,107 @@ def test_log_mse_auc_and_steps_to_threshold():
     assert auc_2000 > auc_500  # more area accumulated over a longer window
     assert L.steps_to_threshold(steps, mse, 2.0) == 500
     assert L.steps_to_threshold(steps, mse, 0.01) is None
+
+
+def test_mase_is_invariant_to_scale():
+    """The controlled scale intervention multiplies a window by b, which scales
+    the MASE numerator and its seasonal-naive denominator equally. This is the
+    property that makes MASE a fair metric across scale assignments."""
+    torch.manual_seed(0)
+    context = torch.randn(4, 64).cumsum(dim=1)
+    valid = torch.ones(4, 64)
+    periods = torch.tensor([24, 7, 24, 7])
+    pred = context + 0.3 * torch.randn(4, 64)
+
+    def mase(b: float) -> torch.Tensor:
+        numerator = L.masked_mae(pred * b, context * b, valid, reduction="none")
+        return numerator / L.seasonal_naive_mae(context * b, valid, periods)
+
+    assert torch.allclose(mase(1.0), mase(10.0), atol=1e-6)
+
+
+def test_seasonal_naive_mae_flags_constant_windows():
+    context = torch.stack([torch.ones(32), torch.arange(32).float()])
+    naive = L.seasonal_naive_mae(context, torch.ones(2, 32), torch.tensor([7, 7]))
+    assert torch.isnan(naive[0])  # constant -> zero denominator
+    assert naive[1] == pytest.approx(7.0)
+
+
+def test_seasonal_naive_mae_falls_back_to_lag_one_when_period_too_long():
+    """ "4S" implies a 21,600-step daily cycle against a 512-step context;
+    falling back to lag 1 keeps the dataset in the dispersion metrics."""
+    context = torch.arange(32).float().unsqueeze(0)
+    valid = torch.ones(1, 32)
+    too_long = L.seasonal_naive_mae(context, valid, torch.tensor([100]))
+    lag_one = L.seasonal_naive_mae(context, valid, torch.tensor([1]))
+    assert too_long[0] == pytest.approx(lag_one[0])
+    assert too_long[0] == pytest.approx(1.0)
+
+
+def test_seasonal_period_handles_multipliers_and_anchors():
+    assert L.seasonal_period("H") == 24
+    assert L.seasonal_period("5T") == 288
+    assert L.seasonal_period("D") == 7
+    assert L.seasonal_period("M") == 12
+    assert L.seasonal_period("Q-DEC") == 4
+    assert L.seasonal_period("W-SUN") == 1
+    assert L.seasonal_period("A-DEC") == 1
+
+
+def test_aggregation_drops_unusable_mase_windows():
+    errors = np.array([np.nan, 2.0, 4.0, np.nan])
+    sources = np.array(["a", "a", "b", "b"])
+    per_source = L.group_mean_by_source(errors, sources)
+    assert per_source == {"a": 2.0, "b": 4.0}
+    assert L.pooled_mean(errors) == pytest.approx(3.0)
+    assert L.dispersion_metrics({"a": float("nan"), "b": 3.0})["n_sources"] == 1
+
+
+def test_normalized_space_mase_equals_original_space_mase():
+    """MASE computed in normalized space is identical to MASE in original
+    space: the affine normalization (x - a) / b divides numerator and
+    denominator by the same b, and the shift a cancels in both because each is
+    built from differences. So "nMASE" is not a distinct metric from MASE."""
+    torch.manual_seed(0)
+    context = torch.randn(4, 64).cumsum(dim=1)
+    valid = torch.ones(4, 64)
+    periods = torch.tensor([24, 24, 7, 7])
+    pred = context + 0.3 * torch.randn(4, 64)
+
+    a = context.mean(dim=1, keepdim=True)
+    b = context.std(dim=1, keepdim=True)
+    normalized_context = (context - a) / b
+    normalized_pred = (pred - a) / b
+
+    mase = L.masked_mae(pred, context, valid, reduction="none") / L.seasonal_naive_mae(
+        context, valid, periods
+    )
+    nmase = L.masked_mae(
+        normalized_pred, normalized_context, valid, reduction="none"
+    ) / L.seasonal_naive_mae(normalized_context, valid, periods)
+
+    assert torch.allclose(mase, nmase, atol=1e-6)
+
+
+def test_safe_gradient_clipping_handles_norm_square_overflow():
+    parameter = torch.tensor(1.0, requires_grad=True)
+    loss = (parameter * 1e15).square()
+
+    metrics = L.backward_with_safe_gradient_clipping(loss, [parameter], 1.0)
+
+    assert np.isclose(metrics["total_norm_before_clip"], 2e30, rtol=1e-6)
+    assert np.isclose(metrics["total_norm_after_clip"], 1.0, rtol=1e-6)
+    assert np.isclose(float(parameter.grad), 1.0, rtol=1e-6)
+    assert metrics["clipped"]
+
+
+def test_safe_gradient_clipping_restores_unclipped_gradient():
+    parameter = torch.tensor(2.0, requires_grad=True)
+    loss = parameter.square()
+
+    metrics = L.backward_with_safe_gradient_clipping(loss, [parameter], 10.0)
+
+    assert np.isclose(metrics["total_norm_before_clip"], 4.0)
+    assert np.isclose(metrics["total_norm_after_clip"], 4.0)
+    assert np.isclose(float(parameter.grad), 4.0)
+    assert not metrics["clipped"]

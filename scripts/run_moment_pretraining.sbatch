@@ -43,6 +43,10 @@ PREDICTION_LENGTH=${PREDICTION_LENGTH:-128}
 INDEX=${INDEX:-outputs/gifteval_window_index/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
 STEPS=${STEPS:-30000}
 BATCH_SIZE=${BATCH_SIZE:-512}
+CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-2000}
+EVAL_EVERY=${EVAL_EVERY:-250}
+EVAL_BATCHES=${EVAL_BATCHES:-50}
+EVAL_WINDOWS_PER_DATASET=${EVAL_WINDOWS_PER_DATASET:-64}
 JOBTAG=${JOBTAG:-gifteval_moment_${SLURM_ARRAY_JOB_ID}}
 
 if [ ! -f "${INDEX}" ]; then
@@ -80,5 +84,9 @@ uv run python -m src.tsfm_pretraining.train --config-name=tsfm_moment \
   "window_index.cache_path=${INDEX}" \
   "train.steps=${STEPS}" \
   "train.batch_size=${BATCH_SIZE}" \
+  "train.checkpoint_every=${CHECKPOINT_EVERY}" \
+  "train.eval_every=${EVAL_EVERY}" \
+  "train.eval_batches=${EVAL_BATCHES}" \
+  "train.eval_windows_per_dataset=${EVAL_WINDOWS_PER_DATASET}" \
   "wandb.experiment=${JOBTAG}" \
   "output_dir=${run_dir}"

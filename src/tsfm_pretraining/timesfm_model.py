@@ -37,17 +37,19 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 import torch
-from pandas.tseries.frequencies import to_offset
 
 from . import losses as L
 from . import window_index as wi
 from .vendor.timesfm_v1.pytorch_patched_decoder import (
     PatchedTimeSeriesDecoder,
     TimesFMConfig,
+    _shift_padded_seq,
 )
 
 TIMESFM_REVISION = "705685c9122eeecc53e57285e44598c3453acb60"
 CONDITIONS = ("timesfm_native_original", "timesfm_normalized")
+NORMALIZATION_MODES = ("first_patch", "whole_context")
+OBJECTIVES = ("mse", "combined")
 
 # ~17.7M params: smoke-test config (see notes/agentic_logs for the search that
 # picked these dims against PatchedTimeSeriesDecoder's actual parameter count).
@@ -103,29 +105,6 @@ def _initialize_attention_scaling(model: PatchedTimeSeriesDecoder) -> None:
             torch.nn.init.zeros_(module.scaling)
 
 
-# GiftEvalPretrain stores gluonts/old-pandas frequency aliases (e.g. "M",
-# "5T", "A-DEC") that newer pandas rejects in favor of "ME"/"min"/"YE-DEC".
-_OLD_TO_NEW_FREQ_BASE = {
-    "Y": "YE",
-    "A": "YE",
-    "Q": "QE",
-    "M": "ME",
-    "H": "h",
-    "T": "min",
-    "S": "s",
-    "U": "us",
-}
-
-
-def _parse_offset(freq: str):
-    base, _, anchor = freq.partition("-")
-    split = next((i for i, c in enumerate(base) if not c.isdigit()), len(base))
-    mult, code = base[:split], base[split:]
-    new_code = _OLD_TO_NEW_FREQ_BASE.get(code, code)
-    anchor_suffix = f"-{anchor}" if anchor else ""
-    return to_offset(f"{mult}{new_code}{anchor_suffix}")
-
-
 def frequency_bucket(freq: str) -> int:
     """Maps a pandas-style frequency string to TimesFM's 3-way frequency
     embedding bucket (0 = sub-daily, 1 = daily/weekly, 2 = monthly or coarser).
@@ -135,7 +114,7 @@ def frequency_bucket(freq: str) -> int:
     checkpoint's bucket semantics, which don't matter here since freq_emb is
     randomly initialized and learned fresh.
     """
-    offset = _parse_offset(freq)
+    offset = L.parse_offset(freq)
     try:
         seconds = offset.nanos / 1e9
     except ValueError:
@@ -210,8 +189,11 @@ def make_batch(
         if scale_assignment is not None:
             b = window_index.scale_for(row, scale_assignment, b_low, b_high)
             mean = row["context_mean"]
-            context = mean + b * (context - mean)
-            target = mean + b * (target - mean)
+            std = row["context_std"]
+            context[context_valid] = b * (context[context_valid] - mean) / std
+            context[~context_valid] = 0.0
+            target[tgt_valid] = b * (target[tgt_valid] - mean) / std
+            target[~tgt_valid] = 0.0
             scales[i] = b
 
         contexts[i] = context
@@ -233,14 +215,55 @@ def make_batch(
     )
 
 
-def run_decoder(model: PatchedTimeSeriesDecoder, batch: TimesFMBatch):
+def _preprocess_whole_context(
+    model: PatchedTimeSeriesDecoder, batch: TimesFMBatch
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+    """TimesFM preprocessing with causal statistics from the whole context."""
+    batch_size = batch.context.shape[0]
+    patched_inputs = batch.context.view(batch_size, -1, model.config.patch_len)
+    patched_pads = batch.context_padding.view(batch_size, -1, model.config.patch_len)
+    patched_inputs = torch.where(patched_pads == 1.0, 0.0, patched_inputs)
+    patched_pads = torch.where(
+        torch.abs(patched_inputs - model.config.pad_val) < model.config.tolerance,
+        torch.ones_like(patched_pads),
+        patched_pads,
+    )
+
+    valid = 1.0 - patched_pads
+    count = valid.sum(dim=(1, 2)).clamp_min(1.0)
+    mu = (patched_inputs * valid).sum(dim=(1, 2)) / count
+    centered = (patched_inputs - mu[:, None, None]) * valid
+    sigma = torch.sqrt((centered.square().sum(dim=(1, 2)) / count).clamp_min(0.0))
+    sigma = sigma.clamp_min(model.config.tolerance)
+    normalized = centered / sigma[:, None, None]
+
+    concat_inputs = torch.cat([normalized, patched_pads], dim=-1)
+    model_input = model.input_ff_layer(concat_inputs)
+    patched_padding = torch.min(patched_pads, dim=-1)[0]
+    if model.config.use_positional_embedding:
+        pos_emb = model.position_emb(model_input.shape[1]).to(model_input.device)
+        pos_emb = torch.concat([pos_emb] * model_input.shape[0], dim=0)
+        model_input += _shift_padded_seq(patched_padding, pos_emb)
+    return model_input, patched_padding, (mu, sigma)
+
+
+def run_decoder(
+    model: PatchedTimeSeriesDecoder,
+    batch: TimesFMBatch,
+    normalization_mode: str = "first_patch",
+):
     """Forward pass exposing both the normalized (pre-inverse-transform) and
     original-space (post-inverse-transform) last-patch output, following the
     exact same submodule sequence as `PatchedTimeSeriesDecoder.forward`."""
     num_outputs = len(model.config.quantiles) + 1
-    model_input, patched_padding, stats, _ = model._preprocess_input(
-        input_ts=batch.context, input_padding=batch.context_padding
-    )
+    if normalization_mode not in NORMALIZATION_MODES:
+        raise ValueError(f"normalization_mode must be one of {NORMALIZATION_MODES}")
+    if normalization_mode == "first_patch":
+        model_input, patched_padding, stats, _ = model._preprocess_input(
+            input_ts=batch.context, input_padding=batch.context_padding
+        )
+    else:
+        model_input, patched_padding, stats = _preprocess_whole_context(model, batch)
     f_emb = model.freq_emb(batch.freq)
     model_input = model_input + f_emb
     model_output = model.stacked_transformer(model_input, patched_padding)
@@ -256,22 +279,38 @@ def run_decoder(model: PatchedTimeSeriesDecoder, batch: TimesFMBatch):
 
 @dataclass
 class TimesFMForwardResult:
-    mse_per_example: torch.Tensor  # [B]
+    mse_per_example: torch.Tensor  # [B], in `condition`'s space (the objective)
     pinball_per_example: torch.Tensor  # [B]
     loss_per_example: torch.Tensor  # [B], mse + mean(pinball), in `condition`'s space
+    normalized_mse: torch.Tensor  # [B], always in normalized space
+    mase: torch.Tensor  # [B], original-space MAE / seasonal-naive MAE
+    degenerate: torch.Tensor  # [B] bool, sigma sitting on the clamp floor
     original_point_forecast: torch.Tensor  # [B, horizon_len]
 
 
 def forward(
-    model: PatchedTimeSeriesDecoder, batch: TimesFMBatch, condition: str
+    model: PatchedTimeSeriesDecoder,
+    batch: TimesFMBatch,
+    condition: str,
+    normalization_mode: str = "first_patch",
 ) -> TimesFMForwardResult:
     if condition not in CONDITIONS:
         raise ValueError(
             f"unknown condition {condition!r}, must be one of {CONDITIONS}"
         )
 
-    normalized_out, original_out, (mu, sigma) = run_decoder(model, batch)
+    normalized_out, original_out, (mu, sigma) = run_decoder(
+        model, batch, normalization_mode
+    )
     quantiles = model.config.quantiles
+
+    # Eligibility must not depend on the imposed scale. Dividing the selected
+    # normalization sigma by the known b recovers its pre-intervention value.
+    # This also catches a near-flat first patch that crosses the 1e-6 clamp only
+    # after receiving b=10, which the previous post-intervention check retained
+    # in one assignment and dropped in its complement.
+    base_sigma = sigma / batch.scale
+    degenerate = base_sigma <= model.config.tolerance * (1.0 + 1e-6)
 
     if condition == "timesfm_native_original":
         point = original_out[..., 0]
@@ -285,10 +324,36 @@ def forward(
     mse = L.masked_mse(point, target, batch.target_valid, reduction="none")
     pinball = _masked_pinball(quantile_pred, target, batch.target_valid, quantiles)
 
+    # Evaluation metrics, computed regardless of which space `condition`
+    # optimizes in so both arms are scored on identical definitions.
+    normalized_target = (batch.target - mu.unsqueeze(-1)) / sigma.unsqueeze(-1)
+    normalized_mse = L.masked_mse(
+        normalized_out[..., 0], normalized_target, batch.target_valid, reduction="none"
+    )
+    original_mae = L.masked_mae(
+        original_out[..., 0], batch.target, batch.target_valid, reduction="none"
+    )
+    periods = torch.as_tensor(
+        [L.seasonal_period(f) for f in batch.frequency],
+        device=batch.target.device,
+    )
+    # context_padding is 1 = missing (TimesFM convention), so validity is its
+    # complement.
+    naive_mae = L.seasonal_naive_mae(
+        batch.context, 1.0 - batch.context_padding, periods
+    )
+
+    # Degenerate windows carry no usable normalized-space target, so they are
+    # excluded from every reported metric (NaN is dropped downstream by
+    # group_mean_by_source / pooled_mean) rather than silently dominating them.
+    nan = torch.tensor(float("nan"), device=normalized_mse.device)
     return TimesFMForwardResult(
         mse_per_example=mse,
         pinball_per_example=pinball,
         loss_per_example=mse + pinball,
+        normalized_mse=torch.where(degenerate, nan, normalized_mse),
+        mase=torch.where(degenerate, nan, original_mae / naive_mae),
+        degenerate=degenerate,
         original_point_forecast=original_out[..., 0],
     )
 
@@ -313,19 +378,31 @@ def training_step_metrics(
     model: PatchedTimeSeriesDecoder,
     batch: TimesFMBatch,
     condition: str,
+    normalization_mode: str,
+    objective: str,
     optimizer: torch.optim.Optimizer,
     grad_clip_norm: float,
 ) -> dict:
     optimizer.zero_grad(set_to_none=True)
-    result = forward(model, batch, condition)
-    loss = result.loss_per_example.mean()
-    loss.backward()
-
-    mse_params = list(model.horizon_ff_layer.parameters())
-    mse_grad_norm = L.grad_norm(mse_params)
-    total_grad_norm_before = L.grad_norm(model.parameters())
-    clipped_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
-    total_grad_norm_after = L.grad_norm(model.parameters())
+    if objective not in OBJECTIVES:
+        raise ValueError(f"objective must be one of {OBJECTIVES}")
+    result = forward(model, batch, condition, normalization_mode)
+    # Windows whose pre-intervention normalization sigma sits on the clamp
+    # floor have no well-defined normalized-space target.
+    keep = ~result.degenerate
+    if not bool(keep.any()):
+        raise RuntimeError("every window in the batch has a degenerate sigma")
+    objective_loss = (
+        result.mse_per_example if objective == "mse" else result.loss_per_example
+    )
+    loss = objective_loss[keep].mean()
+    output_head_params = list(model.horizon_ff_layer.parameters())
+    gradient_metrics = L.backward_with_safe_gradient_clipping(
+        loss,
+        model.parameters(),
+        grad_clip_norm,
+        tracked_parameters=output_head_params,
+    )
     optimizer.step()
 
     return {
@@ -336,10 +413,18 @@ def training_step_metrics(
             result.mse_per_example.detach().mean()
             / result.pinball_per_example.detach().mean().clamp_min(1e-12)
         ),
-        "mse_grad_norm": mse_grad_norm,
-        "total_grad_norm_before_clip": total_grad_norm_before,
-        "total_grad_norm_after_clip": total_grad_norm_after,
-        "clipped": bool(float(clipped_norm) > grad_clip_norm),
+        "output_head_grad_norm": gradient_metrics[
+            "tracked_norm_before_clip"
+        ],
+        "total_grad_norm_before_clip": gradient_metrics[
+            "total_norm_before_clip"
+        ],
+        "total_grad_norm_after_clip": gradient_metrics[
+            "total_norm_after_clip"
+        ],
+        "clipped": gradient_metrics["clipped"],
+        "step_skipped": False,
+        "degenerate_frac": float(result.degenerate.float().mean()),
         "dataset": batch.dataset,
         "domain": batch.domain,
         "frequency": batch.frequency,

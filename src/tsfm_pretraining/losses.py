@@ -9,6 +9,7 @@ metrics").
 
 import numpy as np
 import torch
+from pandas.tseries.frequencies import to_offset
 
 TROUGH_STEP_CUTOFF = 2000  # matches the synthetic loss-space Gini table convention
 
@@ -39,6 +40,131 @@ def masked_mse(
     if reduction == "mean":
         return per_example.mean()
     raise ValueError(f"unknown reduction {reduction!r}")
+
+
+def masked_mae(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    *,
+    reduction: str = "mean",
+) -> torch.Tensor:
+    """Elementwise absolute error restricted to `mask` (1 = included).
+
+    Same masking contract as `masked_mse`. Used as the MASE numerator.
+    """
+    if mask.ndim != pred.ndim:
+        raise ValueError(
+            f"mask.ndim ({mask.ndim}) must equal pred.ndim ({pred.ndim}); a mask "
+            "missing a channel/trailing dim silently broadcasts into a wrong-shaped "
+            "cross product instead of a per-example mask -- unsqueeze it explicitly"
+        )
+    ae = (pred - target).abs() * mask
+    denom = mask.sum(dim=tuple(range(1, mask.ndim))).clamp_min(1.0)
+    per_example = ae.sum(dim=tuple(range(1, ae.ndim))) / denom
+    if reduction == "none":
+        return per_example
+    if reduction == "mean":
+        return per_example.mean()
+    raise ValueError(f"unknown reduction {reduction!r}")
+
+
+# GiftEvalPretrain stores gluonts/old-pandas frequency aliases (e.g. "M",
+# "5T", "A-DEC") that newer pandas rejects in favor of "ME"/"min"/"YE-DEC".
+_OLD_TO_NEW_FREQ_BASE = {
+    "Y": "YE",
+    "A": "YE",
+    "Q": "QE",
+    "M": "ME",
+    "H": "h",
+    "T": "min",
+    "S": "s",
+    "U": "us",
+}
+
+
+def parse_offset(freq: str):
+    """Parses a GiftEvalPretrain frequency alias into a pandas offset,
+    translating legacy aliases and preserving any multiplier and anchor
+    (e.g. "5T" -> 5 minutes, "W-SUN" -> weekly)."""
+    base, _, anchor = freq.partition("-")
+    split = next((i for i, c in enumerate(base) if not c.isdigit()), len(base))
+    mult, code = base[:split], base[split:]
+    new_code = _OLD_TO_NEW_FREQ_BASE.get(code, code)
+    anchor_suffix = f"-{anchor}" if anchor else ""
+    return to_offset(f"{mult}{new_code}{anchor_suffix}")
+
+
+def seasonal_period(freq: str) -> int:
+    """Number of steps in the dominant seasonal cycle for a frequency, the
+    MASE denominator's lag.
+
+    Derived from the offset's actual duration rather than a lookup table of
+    literal alias strings, so multipliers and anchors (e.g. "4S", "30T",
+    "W-SUN", "A-DEC") are handled without enumerating every spelling. Follows
+    the GIFT-Eval / gluonts `get_seasonality` convention: sub-daily
+    frequencies take the daily cycle, daily takes the weekly cycle, weekly and
+    yearly have no shorter cycle (1), monthly takes 12 and quarterly 4.
+    """
+    offset = parse_offset(freq)
+    try:
+        seconds = offset.nanos / 1e9
+    except ValueError:
+        # Non-fixed durations (weeks, months, quarters, years).
+        name = type(offset).__name__
+        if name == "Week":
+            return 1
+        if name.startswith("Month"):
+            return 12
+        if name.startswith("Quarter"):
+            return 4
+        return 1  # yearly and coarser
+    if seconds < 86400:
+        return round(86400 / seconds)  # sub-daily -> daily cycle
+    if seconds == 86400:
+        return 7  # daily -> weekly cycle
+    return 1
+
+
+def seasonal_naive_mae(
+    context: torch.Tensor,
+    valid: torch.Tensor,
+    periods: torch.Tensor,
+    *,
+    floor: float = 1e-8,
+) -> torch.Tensor:
+    """In-sample seasonal-naive MAE per example: mean |y_t - y_{t-m}| over the
+    context window, the standard MASE denominator.
+
+    `context`/`valid`: [B, L]. `periods`: [B] integer seasonal lag m per
+    example. A pair contributes only where both endpoints are valid.
+
+    When m does not fit in the context window the lag falls back to 1, the
+    plain random-walk naive baseline. Some corpus frequencies imply a seasonal
+    period far longer than the context (e.g. "4S" implies a daily cycle of
+    21,600 steps against a 512-step context); dropping those windows would
+    remove entire datasets from the dispersion metrics, which distorts Gini
+    more than using a shorter lag does. Every window of a dataset shares that
+    dataset's frequency, so the lag is constant within a source either way.
+
+    Examples that are exactly constant yield a denominator below `floor` and
+    are returned as NaN so callers drop them, rather than emitting a
+    divide-by-near-zero MASE that would dominate any mean or Gini.
+    """
+    length = context.shape[1]
+    idx = torch.arange(length, device=context.device).unsqueeze(0)
+    lag = periods.clamp_min(1)
+    lag = torch.where(lag >= length, torch.ones_like(lag), lag).unsqueeze(1)
+    src = idx - lag
+    gather_idx = src.clamp_min(0)
+    lagged = torch.gather(context, 1, gather_idx)
+    lagged_valid = torch.gather(valid, 1, gather_idx)
+    pair_valid = valid * lagged_valid * (src >= 0).to(valid.dtype)
+    ae = (context - lagged).abs() * pair_valid
+    denom = pair_valid.sum(dim=1)
+    naive = ae.sum(dim=1) / denom.clamp_min(1.0)
+    unusable = (denom < 1.0) | (naive < floor)
+    return naive.masked_fill(unusable, float("nan"))
 
 
 def pinball_loss(
@@ -100,6 +226,7 @@ def dispersion_metrics(per_source_error: dict[str, float]) -> dict:
     means, since the two are only equal for a balanced validation set.
     """
     values = np.array(list(per_source_error.values()), dtype=np.float64)
+    values = values[np.isfinite(values)]  # MASE drops sources with no usable windows
     return {
         "gini": gini_coefficient(values),
         "unweighted_mean": float(values.mean()) if values.size else float("nan"),
@@ -111,18 +238,51 @@ def pooled_mean(per_example_error: np.ndarray) -> float:
     """Natural-mixture-weighted global error: the plain mean over every example
     in its natural (imbalanced) proportion, as opposed to `unweighted_mean` in
     `dispersion_metrics`, which averages per-source means and therefore weights
-    every source equally regardless of size."""
-    return float(np.mean(per_example_error))
+    every source equally regardless of size.
+
+    Ignores non-finite entries so a MASE array with dropped windows pools over
+    the windows that do have a usable seasonal-naive denominator."""
+    return float(np.nanmean(per_example_error))
 
 
 def group_mean_by_source(
     per_example_error: np.ndarray, source_ids: np.ndarray
 ) -> dict[str, float]:
-    """Per-source mean error, for feeding into `dispersion_metrics`."""
+    """Per-source mean error, for feeding into `dispersion_metrics`.
+
+    Non-finite per-example entries (MASE windows without a usable
+    seasonal-naive denominator) are ignored; a source with no usable window at
+    all yields NaN and is dropped by `dispersion_metrics`.
+    """
     out: dict[str, float] = {}
     source_ids = np.asarray(source_ids)
     for source in np.unique(source_ids):
-        out[str(source)] = float(per_example_error[source_ids == source].mean())
+        values = per_example_error[source_ids == source]
+        usable = values[np.isfinite(values)]
+        out[str(source)] = float(usable.mean()) if usable.size else float("nan")
+    return out
+
+
+def group_median_by_source(
+    per_example_error: np.ndarray, source_ids: np.ndarray
+) -> dict[str, float]:
+    """Per-source *median* error, the outlier-robust counterpart to
+    `group_mean_by_source`.
+
+    Needed because per-window normalized error is heavy-tailed on real data:
+    a sparse intermittent series (e.g. retail unit sales that are mostly zero)
+    can have a context standard deviation far smaller than a rare spike, so
+    dividing by it sends one window's nMSE to ~1e7 and that single window then
+    determines its dataset's mean and the corpus Gini. The median answers the
+    same question ("how well is this source fit") without letting one window
+    set the answer.
+    """
+    out: dict[str, float] = {}
+    source_ids = np.asarray(source_ids)
+    for source in np.unique(source_ids):
+        values = per_example_error[source_ids == source]
+        usable = values[np.isfinite(values)]
+        out[str(source)] = float(np.median(usable)) if usable.size else float("nan")
     return out
 
 
@@ -167,3 +327,45 @@ def grad_norm(parameters) -> float:
         if p.grad is not None:
             total += float(p.grad.detach().float().norm(2) ** 2)
     return total**0.5
+
+
+def backward_with_safe_gradient_clipping(
+    loss: torch.Tensor,
+    parameters,
+    max_norm: float,
+    tracked_parameters=(),
+) -> dict[str, float | bool]:
+    """Backpropagate and clip without overflowing the gradient-norm reduction.
+
+    A temporary scalar multiplier keeps the backward pass representable. The
+    multiplier is removed analytically when computing the original gradient
+    norm and final clipping coefficient, so the optimizer receives the same
+    clipped gradient direction and magnitude as an exact unscaled reduction.
+    """
+    parameters = list(parameters)
+    tracked_parameters = list(tracked_parameters)
+    loss_value = float(loss.detach().abs())
+    if not np.isfinite(loss_value):
+        raise RuntimeError("training loss is not finite")
+
+    backward_scale = 1.0 / max(1.0, loss_value)
+    (loss * backward_scale).backward()
+    scaled_norm = grad_norm(parameters)
+    scaled_tracked_norm = grad_norm(tracked_parameters)
+    if not np.isfinite(scaled_norm) or not np.isfinite(scaled_tracked_norm):
+        raise RuntimeError("scaled gradient norm is not finite")
+
+    norm_before_clip = scaled_norm / backward_scale
+    tracked_norm_before_clip = scaled_tracked_norm / backward_scale
+    clip_coefficient = min(1.0, max_norm / (norm_before_clip + 1e-6))
+    gradient_multiplier = clip_coefficient / backward_scale
+    for parameter in parameters:
+        if parameter.grad is not None:
+            parameter.grad.mul_(gradient_multiplier)
+
+    return {
+        "tracked_norm_before_clip": tracked_norm_before_clip,
+        "total_norm_before_clip": norm_before_clip,
+        "total_norm_after_clip": grad_norm(parameters),
+        "clipped": clip_coefficient < 1.0,
+    }

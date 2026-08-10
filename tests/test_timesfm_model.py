@@ -181,7 +181,7 @@ def test_controlled_scale_gradients_match_expected_powers(tiny_corpus):
             freq=freq,
             dataset=np.array(["x"] * 4),
             domain=np.array(["x"] * 4),
-            frequency=np.array(["x"] * 4),
+            frequency=np.array(["H"] * 4),
             scale=torch.full((4,), b),
         )
         model.zero_grad(set_to_none=True)
@@ -236,7 +236,7 @@ def test_normalized_space_removes_scale_dependence():
             freq=freq,
             dataset=np.array(["x"] * 4),
             domain=np.array(["x"] * 4),
-            frequency=np.array(["x"] * 4),
+            frequency=np.array(["H"] * 4),
             scale=torch.full((4,), b),
         )
         model.zero_grad(set_to_none=True)
@@ -276,3 +276,168 @@ def test_horizon_len_mismatch_raises(tiny_corpus):
         assert "horizon_len" in str(e)
     else:
         raise AssertionError("expected ValueError for mismatched horizon_len")
+
+
+def test_flat_first_patch_window_is_flagged_degenerate_and_excluded():
+    """TimesFM derives sigma from the FIRST PATCH only and clamps it at
+    config.tolerance, so a window whose first patch is constant normalizes by
+    1e-6 and its normalized-space target explodes. Such windows must be
+    flagged and kept out of the reported metrics."""
+    config = tm.CONFIG_17M
+    model = tm.build_timesfm_model(config, seed=0)
+    context = torch.randn(2, 512).cumsum(dim=1)
+    context[1, : config.patch_len] = 3.0  # flat first patch -> sigma at clamp
+    batch = tm.TimesFMBatch(
+        context=context,
+        context_padding=torch.zeros(2, 512),
+        target=torch.randn(2, config.horizon_len) * 50.0,
+        target_valid=torch.ones(2, config.horizon_len),
+        freq=torch.zeros(2, 1, dtype=torch.long),
+        dataset=np.array(["a", "b"]),
+        domain=np.array(["d", "d"]),
+        frequency=np.array(["H", "H"]),
+        scale=torch.ones(2),
+    )
+    result = tm.forward(model, batch, "timesfm_normalized")
+
+    assert not bool(result.degenerate[0])
+    assert bool(result.degenerate[1])
+    # The degenerate window contributes nothing to either reported metric.
+    assert torch.isfinite(result.normalized_mse[0])
+    assert torch.isnan(result.normalized_mse[1])
+    assert torch.isnan(result.mase[1])
+
+
+def test_degenerate_filter_is_independent_of_controlled_scale():
+    config = _tiny_config()
+    model = tm.build_timesfm_model(config, seed=0)
+    first_patch = torch.arange(config.patch_len) * 5e-8
+    context = torch.cat([first_patch, torch.arange(config.patch_len)])
+    target = torch.arange(config.horizon_len, dtype=torch.float32)
+
+    results = []
+    for scale in (1.0, 10.0):
+        batch = tm.TimesFMBatch(
+            context=(context * scale).unsqueeze(0),
+            context_padding=torch.zeros(1, 2 * config.patch_len),
+            target=(target * scale).unsqueeze(0),
+            target_valid=torch.ones(1, config.horizon_len),
+            freq=torch.zeros(1, 1, dtype=torch.long),
+            dataset=np.array(["x"]),
+            domain=np.array(["x"]),
+            frequency=np.array(["H"]),
+            scale=torch.tensor([scale]),
+        )
+        results.append(tm.forward(model, batch, "timesfm_normalized"))
+
+    assert bool(results[0].degenerate[0])
+    assert bool(results[1].degenerate[0])
+
+
+def test_whole_context_statistics_rescue_flat_first_patch():
+    config = _tiny_config()
+    model = tm.build_timesfm_model(config, seed=0)
+    context = torch.arange(2 * config.patch_len, dtype=torch.float32)
+    context[: config.patch_len] = 3.0
+    batch = tm.TimesFMBatch(
+        context=context.unsqueeze(0),
+        context_padding=torch.zeros(1, 2 * config.patch_len),
+        target=torch.arange(config.horizon_len, dtype=torch.float32).unsqueeze(0),
+        target_valid=torch.ones(1, config.horizon_len),
+        freq=torch.zeros(1, 1, dtype=torch.long),
+        dataset=np.array(["x"]),
+        domain=np.array(["x"]),
+        frequency=np.array(["H"]),
+        scale=torch.ones(1),
+    )
+
+    first_patch = tm.forward(model, batch, "timesfm_normalized", "first_patch")
+    whole_context = tm.forward(model, batch, "timesfm_normalized", "whole_context")
+
+    assert bool(first_patch.degenerate[0])
+    assert not bool(whole_context.degenerate[0])
+
+
+def test_normalized_loss_is_scale_invariant_for_both_statistic_modes():
+    config = _tiny_config()
+    model = tm.build_timesfm_model(config, seed=0)
+    torch.manual_seed(0)
+    context = torch.randn(4, 2 * config.patch_len)
+    target = torch.randn(4, config.horizon_len)
+    for normalization_mode in tm.NORMALIZATION_MODES:
+        losses = []
+        for scale in (1.0, 10.0):
+            batch = tm.TimesFMBatch(
+                context=context * scale,
+                context_padding=torch.zeros_like(context),
+                target=target * scale,
+                target_valid=torch.ones_like(target),
+                freq=torch.zeros(4, 1, dtype=torch.long),
+                dataset=np.array(["x"] * 4),
+                domain=np.array(["x"] * 4),
+                frequency=np.array(["H"] * 4),
+                scale=torch.full((4,), scale),
+            )
+            result = tm.forward(
+                model, batch, "timesfm_normalized", normalization_mode
+            )
+            losses.append(result.mse_per_example)
+
+        assert torch.allclose(losses[0], losses[1], rtol=1e-5, atol=1e-6)
+
+
+def test_original_loss_step_handles_extreme_natural_scale():
+    config = _tiny_config()
+    torch.manual_seed(0)
+    context = torch.randn(4, 2 * config.patch_len) * 1e17
+    target = torch.randn(4, config.horizon_len) * 1e17
+    batch = tm.TimesFMBatch(
+        context=context,
+        context_padding=torch.zeros_like(context),
+        target=target,
+        target_valid=torch.ones_like(target),
+        freq=torch.zeros(4, 1, dtype=torch.long),
+        dataset=np.array(["x"] * 4),
+        domain=np.array(["x"] * 4),
+        frequency=np.array(["H"] * 4),
+        scale=torch.ones(4),
+    )
+
+    for normalization_mode in tm.NORMALIZATION_MODES:
+        model = tm.build_timesfm_model(config, seed=0)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+        metrics = tm.training_step_metrics(
+            model,
+            batch,
+            "timesfm_native_original",
+            normalization_mode,
+            "mse",
+            optimizer,
+            1.0,
+        )
+
+        assert not metrics["step_skipped"]
+        assert np.isfinite(metrics["total_grad_norm_before_clip"])
+        assert np.isclose(metrics["total_grad_norm_after_clip"], 1.0)
+        for state in optimizer.state.values():
+            assert all(
+                torch.isfinite(value).all()
+                for value in state.values()
+                if isinstance(value, torch.Tensor)
+            )
+
+
+def test_controlled_batches_standardize_before_applying_scale(tiny_corpus):
+    index, cache = _tiny_index(tiny_corpus)
+    rows = index.split("train").groupby("dataset", sort=False).head(1)
+    batch_a = tm.make_batch(index, rows, cache, horizon_len=32, scale_assignment="A")
+    batch_b = tm.make_batch(index, rows, cache, horizon_len=32, scale_assignment="B")
+
+    assert torch.allclose(
+        batch_a.context / batch_a.scale[:, None],
+        batch_b.context / batch_b.scale[:, None],
+    )
+    assert torch.allclose(
+        batch_a.target / batch_a.scale[:, None],
+        batch_b.target / batch_b.scale[:, None],
+    )
