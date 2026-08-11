@@ -1,0 +1,70 @@
+# Moirai 2.0 Small forecasting pretraining on GiftEvalPretrain.
+# The model starts from random weights. Both loss conditions share every
+# input, target, initialization, and optimization setting.
+#
+# The window index (context 512, prediction 128) is the same canonical index
+# used by chronos2/moment/timesfm, so the dataset/window corpus is identical
+# across arms. Moirai 2.0's own architecture natively predicts only
+# moirai2.predict_horizon (64) steps in a single forward pass (4 patches of
+# 16), so it trains and evaluates on the first 64 of each window's 128-step
+# target -- see notes/agentic_logs/2026-08-10-moirai2-loss-space-integration.md.
+
+model: moirai2
+device: cpu
+condition: moirai2_normalized # moirai2_normalized | moirai2_original
+experiment_kind: natural_mixture # natural_mixture | controlled_scale
+scale_assignment: null # A | B, required for controlled_scale
+scale_b_low: 1.0
+scale_b_high: 10.0
+
+seed: 0
+output_dir: outputs/tsfm_pretraining/moirai2
+
+corpus:
+  root: /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full
+  datasets: null
+
+window_index:
+  context_length: 512
+  prediction_length: 128
+  stride: 512
+  val_series_fraction: 0.1
+  min_valid_fraction: 0.9
+  base_seed: 0
+  max_windows_per_series: null
+  cache_path: null
+
+dataset_weights: null
+
+moirai2:
+  # Official Moirai-2.0-R-small dimensions, about 5M parameters.
+  context_length: 512
+  predict_horizon: 64 # native num_predict_token(4) * patch_size(16)
+  patch_size: 16
+  d_model: 384
+  d_ff: 1024
+  num_layers: 6
+  max_seq_len: 512
+  attn_dropout_p: 0.1
+  dropout_p: 0.1
+  scaling: true
+  quantile_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  grad_clip_norm: 1.0
+
+train:
+  steps: 30000
+  batch_size: 128
+  lr: 1.0e-4
+  optimizer: adamw
+  deterministic: true
+  schedule_seed: 0
+  eval_every: 250
+  eval_batches: 50
+  eval_windows_per_dataset: 64
+  checkpoint_every: 6000
+
+wandb:
+  entity: ts-normalization
+  project: tsfm_pretraining
+  mode: online
+  experiment: gifteval_moirai2

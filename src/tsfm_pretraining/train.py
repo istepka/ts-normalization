@@ -30,6 +30,7 @@ import wandb
 from . import chronos2_adapter as ca
 from . import gifteval_corpus as gc
 from . import losses as L
+from . import moirai2_adapter as m2
 from . import moment_adapter as ma
 from . import timesfm_model as tm
 from . import window_index as wi
@@ -631,6 +632,137 @@ def run_chronos2(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
     return summary
 
 
+def run_moirai2(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
+    if cfg.condition not in m2.CONDITIONS:
+        raise ValueError(f"condition must be one of {m2.CONDITIONS}")
+    model_config = m2.Moirai2Config(**OmegaConf.to_container(cfg.moirai2, resolve=True))
+    if model_config.context_length != cfg.window_index.context_length:
+        raise ValueError(
+            "moirai2.context_length must equal window_index.context_length"
+        )
+    if model_config.predict_horizon > cfg.window_index.prediction_length:
+        raise ValueError(
+            "moirai2.predict_horizon must not exceed window_index.prediction_length"
+        )
+
+    dataset_weights = resolve_dataset_weights(cfg, index)
+    model = m2.build_moirai2_model(model_config, seed=cfg.seed).to(cfg.device)
+    optimizer = OPTIMIZERS[cfg.train.optimizer](model.parameters(), lr=cfg.train.lr)
+    cache = wi.SeriesCache(index.corpus_root)
+    schedule = wi.build_batch_schedule(
+        index,
+        "train",
+        dataset_weights,
+        cfg.train.steps,
+        cfg.train.batch_size,
+        cfg.train.schedule_seed,
+    )
+    train_table = index.split("train").reset_index(drop=True)
+    scale_assignment = (
+        cfg.scale_assignment if cfg.experiment_kind == "controlled_scale" else None
+    )
+
+    pooled_eval_rows = sample_eval_rows(
+        index, cfg.train.eval_batches * cfg.train.batch_size
+    )
+    pooled_eval_batch = m2.make_batch(index, pooled_eval_rows, cache, model_config)
+    strat_eval_rows = sample_stratified_eval_rows(
+        index, cfg.train.eval_windows_per_dataset
+    )
+    strat_eval_batch = m2.make_batch(index, strat_eval_rows, cache, model_config)
+
+    counter = windows_processed_counter()
+    optimization = {"steps_attempted": 0, "steps_skipped": 0}
+    history = {"step": [], "pooled_mse": [], "reports": []}
+    out_dir = Path(cfg.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for step in range(1, cfg.train.steps + 1):
+        rows = train_table.iloc[schedule[step - 1]]
+        batch = m2.make_batch(
+            index,
+            rows,
+            cache,
+            model_config,
+            scale_assignment=scale_assignment,
+            b_low=cfg.scale_b_low,
+            b_high=cfg.scale_b_high,
+        ).to(cfg.device)
+        metrics = m2.training_step_metrics(
+            model,
+            batch,
+            cfg.condition,
+            model_config,
+            optimizer,
+            model_config.grad_clip_norm,
+        )
+        optimization["steps_attempted"] += 1
+        optimization["steps_skipped"] += int(metrics["step_skipped"])
+        update_windows_processed(counter, rows)
+
+        wandb_run.log(
+            {
+                "train/loss": metrics["loss"],
+                "train/output_head_grad_norm": metrics["output_head_grad_norm"],
+                "train/total_grad_norm_before_clip": metrics[
+                    "total_grad_norm_before_clip"
+                ],
+                "train/total_grad_norm_after_clip": metrics[
+                    "total_grad_norm_after_clip"
+                ],
+                "train/clipped": float(metrics["clipped"]),
+                "train/step_skipped": float(metrics["step_skipped"]),
+                "train/degenerate_frac": metrics["degenerate_frac"],
+            },
+            step=step,
+        )
+
+        if step % cfg.train.eval_every == 0 or step == cfg.train.steps:
+            pooled_nmse, pooled_mase = eval_scale_free(
+                m2.forward,
+                model,
+                pooled_eval_batch,
+                cfg.condition,
+                cfg.device,
+                {"config": model_config},
+            )
+            strat_error, strat_mase = eval_scale_free(
+                m2.forward,
+                model,
+                strat_eval_batch,
+                cfg.condition,
+                cfg.device,
+                {"config": model_config},
+            )
+            report = {
+                "pooled_global_error": L.pooled_mean(pooled_nmse),
+                "pooled_mase": L.pooled_mean(pooled_mase),
+                **source_breakdown(strat_error, strat_eval_rows),
+                "mase": source_breakdown(strat_mase, strat_eval_rows),
+            }
+            log_dispersion(wandb_run, report, step)
+            history["step"].append(step)
+            history["pooled_mse"].append(report["pooled_global_error"])
+            history["reports"].append(report)
+            (out_dir / "history.json").write_text(
+                json.dumps(history, indent=2, default=str)
+            )
+            for level in ("dataset", "domain", "frequency"):
+                wandb_run.log(
+                    {f"exposure/{level}_windows_processed_n": len(counter[level])},
+                    step=step,
+                )
+
+        if step % cfg.train.checkpoint_every == 0 or step == cfg.train.steps:
+            save_checkpoint(
+                out_dir / f"checkpoint_step{step}.pt", model, optimizer, step
+            )
+
+    summary = finalize_summary(history, counter, cfg, optimization)
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    return summary
+
+
 def finalize_summary(
     history: dict, counter: dict, cfg: DictConfig, optimization: dict
 ) -> dict:
@@ -649,6 +781,7 @@ def finalize_summary(
         "chronos2_revision": (
             ca.CHRONOS2_REVISION if cfg.model == "chronos2" else None
         ),
+        "moirai2_revision": (m2.MOIRAI2_REVISION if cfg.model == "moirai2" else None),
     }
     early = steps <= L.TROUGH_STEP_CUTOFF
     if early.sum() >= 2:
@@ -751,6 +884,8 @@ def main(cfg: DictConfig) -> None:
         summary = run_timesfm(cfg, index, wandb_run)
     elif cfg.model == "chronos2":
         summary = run_chronos2(cfg, index, wandb_run)
+    elif cfg.model == "moirai2":
+        summary = run_moirai2(cfg, index, wandb_run)
     else:
         raise ValueError(f"unknown model {cfg.model!r}")
     summary["wall_clock_seconds"] = time.time() - start

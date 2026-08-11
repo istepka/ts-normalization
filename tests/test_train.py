@@ -21,6 +21,7 @@ def _base_cfg(tiny_corpus, tmp_path, model: str) -> OmegaConf:
                 "moment": "moment_original",
                 "timesfm": "timesfm_native_original",
                 "chronos2": "chronos2_normalized",
+                "moirai2": "moirai2_normalized",
             }[model],
             "experiment_kind": "natural_mixture",
             "scale_assignment": None,
@@ -71,6 +72,20 @@ def _base_cfg(tiny_corpus, tmp_path, model: str) -> OmegaConf:
                 "initializer_factor": 0.05,
                 "quantiles": [0.1, 0.5, 0.9],
                 "use_arcsinh": True,
+                "grad_clip_norm": 1.0,
+            },
+            "moirai2": {
+                "context_length": 64,
+                "predict_horizon": 32,
+                "patch_size": 16,
+                "d_model": 64,
+                "d_ff": 64,
+                "num_layers": 2,
+                "max_seq_len": 64,
+                "attn_dropout_p": 0.0,
+                "dropout_p": 0.0,
+                "scaling": True,
+                "quantile_levels": [0.1, 0.5, 0.9],
                 "grad_clip_norm": 1.0,
             },
             "train": {
@@ -146,6 +161,23 @@ def test_run_chronos2_end_to_end(tiny_corpus, tmp_path):
     run.finish()
 
     assert summary["chronos2_revision"] == "chronos-forecasting==2.3.1"
+    assert set(summary["windows_processed"]["dataset"]) <= {
+        "synth_a",
+        "synth_b",
+    }
+    assert (Path(cfg.output_dir) / "checkpoint_step4.pt").is_file()
+
+
+def test_run_moirai2_end_to_end(tiny_corpus, tmp_path):
+    cfg = _base_cfg(tiny_corpus, tmp_path, "moirai2")
+    cfg.experiment_kind = "controlled_scale"
+    cfg.scale_assignment = "A"
+    index = train_mod.resolve_window_index(cfg, tiny_corpus[1])
+    run = wandb.init(mode="disabled")
+    summary = train_mod.run_moirai2(cfg, index, run)
+    run.finish()
+
+    assert summary["moirai2_revision"] is not None
     assert set(summary["windows_processed"]["dataset"]) <= {
         "synth_a",
         "synth_b",
