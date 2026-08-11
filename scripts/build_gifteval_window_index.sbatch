@@ -8,11 +8,11 @@
 #SBATCH --time=24:00:00
 #SBATCH --output=logs/%x-%j.out
 
-# CPU-only prerequisite for run_moment_pretraining.sbatch and
-# run_timesfm_pretraining.sbatch: builds and caches the canonical window
-# index once so neither training job burns an expensive GPU allocation on
-# scanning the corpus, and so every paired condition trains on identical
-# windows (see the "Canonical window index" section of
+# CPU-only prerequisite for run_pretraining.sbatch (MODEL=moment or
+# MODEL=timesfm): builds and caches the canonical window index once so
+# neither training job burns an expensive GPU allocation on scanning the
+# corpus, and so every paired condition trains on identical windows (see the
+# "Canonical window index" section of
 # notes/05-timesfm-pretraining-loss-space-plan.md).
 #
 # Scanning is CPU/IO-bound, not GPU-bound; the 24h budget is deliberately
@@ -40,4 +40,4 @@ uv run python -m scripts.build_gifteval_window_index \
   --stride "${STRIDE}"
 
 echo "window index ready at ${OUTPUT}"
-echo "pass window_index.cache_path=${OUTPUT} to run_moment_pretraining.sbatch / run_timesfm_pretraining.sbatch"
+echo "pass window_index.cache_path=${OUTPUT} to run_pretraining.sbatch"
