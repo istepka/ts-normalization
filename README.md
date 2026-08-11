@@ -1,5 +1,38 @@
 # TSFM-normalization project
 
+## Configs
+
+The project uses Hydra configs in `conf/`. YAML remains the record of each
+experiment, while `src/configs.py` supplies structured schemas that reject
+unknown keys, wrong types, and missing required values at runtime.
+
+There are two config families.
+
+- `config.yaml` is the synthetic loss-space experiment.
+- `scale_swap.yaml` inherits the synthetic config and overrides it for the
+  real-data scale-swap experiment.
+- `tsfm_chronos2.yaml`, `tsfm_moirai2.yaml`, `tsfm_moment.yaml`, and
+  `tsfm_timesfm.yaml` define the four TSFM runs.
+- The TSFM configs inherit shared corpus, window-index, training, and W&B
+  defaults from `tsfm_base.yaml`. Their remaining fields are model-specific
+  architecture and experiment choices.
+
+Run a config by selecting its name and adding Hydra overrides as needed.
+
+```sh
+uv run python main.py --config-name=scale_swap
+
+uv run python -m src.tsfm_pretraining.train \
+    --config-name=tsfm_timesfm \
+    device=cuda \
+    timesfm.config_size=70m \
+    train.steps=30000
+```
+
+TSFM runs save the resolved configuration as `resolved_config.yaml` in their
+output directory. This is the configuration to use when checking exactly what
+an experiment ran with.
+
 ## Scripts
 
 #### `build_gifteval_window_index.py` / `.sbatch`

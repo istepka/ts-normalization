@@ -1,7 +1,6 @@
 # Loss-space comparison toy. Single source of truth; code accesses keys
 # directly and will fail if any key is missing (no fail-safe defaults).
 
-seed: 0 # base seed; the actual repeats use the `seeds` list below
 seeds: [0, 1, 2, 3, 4] # each setup is rerun once per seed; plots show mean +/- 1 band
 device: cpu
 output_dir: outputs/loss_space_toy
@@ -113,9 +112,6 @@ plot:
   # The linear-scale companion figures are saved once per zoom window (first N steps),
   # where essentially all convergence happens (the full range crushes it into the y-axis).
   linear_xlim: [200, 500, 2000]
-
-# Loss spaces to compare. Each is trained from identical init and data order.
-modes: [normalized, original]
 
 wandb:
   entity: ts-normalization

@@ -26,6 +26,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 
 import wandb
+from src.configs import TsfmConfig, validate_config
 
 from . import chronos2_adapter as ca
 from . import gifteval_corpus as gc
@@ -813,6 +814,7 @@ def load_checkpoint(
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="tsfm_moment")
 def main(cfg: DictConfig) -> None:
+    validate_config(cfg, TsfmConfig)
     if cfg.train.deterministic:
         torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.benchmark = False

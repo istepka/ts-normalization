@@ -22,6 +22,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import wandb
 from src.captions import write_captions
+from src.configs import ToyConfig, validate_config
 from src.data import (
     RealScaleSwapDataset,
     RealShapeScaledDataset,
@@ -109,6 +110,7 @@ def verification_summary(results: dict, names: list[str]) -> dict:
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
+    validate_config(cfg, ToyConfig)
     setup_labels = list(cfg.setups)
     if cfg.plot.render and setup_labels != SETUP_LABELS:
         raise ValueError("plot.render requires all four standard setups")
