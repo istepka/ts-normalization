@@ -265,14 +265,12 @@ def training_step_metrics(
     optimizer.zero_grad(set_to_none=True)
     result = forward(model, batch, condition)
     loss = result.per_example_loss_masked.mean()
-    loss.backward()
-
-    grad_norm_before = L.grad_norm(model.parameters())
-    clipped = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
-    grad_norm_after = L.grad_norm(model.parameters())
-    step_skipped = not torch.isfinite(clipped)
-    if not step_skipped:
-        optimizer.step()
+    gradient_metrics = L.backward_with_safe_gradient_clipping(
+        loss,
+        model.parameters(),
+        grad_clip_norm,
+    )
+    optimizer.step()
 
     return {
         "loss": float(loss.detach()),
@@ -284,10 +282,10 @@ def training_step_metrics(
         .numpy(),
         "normalized_mse": result.normalized_mse.detach().cpu().numpy(),
         "original_mse": result.original_mse.detach().cpu().numpy(),
-        "grad_norm_before_clip": grad_norm_before,
-        "grad_norm_after_clip": grad_norm_after,
-        "clipped": bool(float(clipped) > grad_clip_norm),
-        "step_skipped": bool(step_skipped),
+        "grad_norm_before_clip": gradient_metrics["total_norm_before_clip"],
+        "grad_norm_after_clip": gradient_metrics["total_norm_after_clip"],
+        "clipped": gradient_metrics["clipped"],
+        "step_skipped": False,
         "dataset": batch.dataset,
         "domain": batch.domain,
         "frequency": batch.frequency,

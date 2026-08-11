@@ -161,6 +161,30 @@ def test_normalized_space_removes_scale_dependence():
     assert abs(ratio - 1.0) < 0.01
 
 
+def test_training_step_safely_clips_large_original_space_gradient():
+    model = ma.build_moment_model(_tiny_model_config(), seed=0)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+    values = torch.linspace(-1.0, 1.0, 32) * 1e15
+    batch = ma.MomentBatch(
+        x_enc=values.repeat(4, 1).unsqueeze(1),
+        input_mask=torch.ones(4, 32),
+        dataset=np.array(["x"] * 4),
+        domain=np.array(["x"] * 4),
+        frequency=np.array(["H"] * 4),
+        scale=torch.full((4,), 1e15),
+        batch_seed=123,
+    )
+
+    metrics = ma.training_step_metrics(
+        model, batch, "moment_original", optimizer, grad_clip_norm=1.0
+    )
+
+    assert not metrics["step_skipped"]
+    assert np.isfinite(metrics["grad_norm_before_clip"])
+    assert np.isclose(metrics["grad_norm_after_clip"], 1.0)
+    assert metrics["clipped"]
+
+
 def test_checkpoint_roundtrip(tiny_corpus, tmp_path):
     index, cache = _tiny_index(tiny_corpus)
     rows = index.split("train").sample(n=4, random_state=0)
