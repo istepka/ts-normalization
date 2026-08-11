@@ -69,7 +69,7 @@ train:
   # dozens) to keep, but frequent enough that a later change of mind about
   # validation sampling / metrics can be recomputed from a saved checkpoint
   # instead of re-running the full (expensive) training run.
-  checkpoint_every: 2000
+  checkpoint_every: 6000
 
 wandb:
   entity: ts-normalization

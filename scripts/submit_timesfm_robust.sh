@@ -12,8 +12,8 @@ export EVAL_EVERY=${EVAL_EVERY:-250}
 export EVAL_BATCHES=${EVAL_BATCHES:-8}
 export EVAL_WINDOWS_PER_DATASET=${EVAL_WINDOWS_PER_DATASET:-32}
 export OBJECTIVE=${OBJECTIVE:-mse}
-export SEEDS_CSV=${SEEDS_CSV:-0,1,2}
-export MODES_CSV=${MODES_CSV:-first_patch,whole_context}
+export SEEDS_CSV=${SEEDS_CSV:-0,1,2,3}
+export MODES_CSV=${MODES_CSV:-whole_context}
 export EXPERIMENT_KIND=${EXPERIMENT_KIND:-controlled_scale}
 
 if [ ! -f "${INDEX}" ]; then
