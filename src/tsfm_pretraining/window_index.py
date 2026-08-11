@@ -356,3 +356,45 @@ def build_window_index(
         )
     table = pd.DataFrame.from_records(rows)
     return WindowIndex(table, config, corpus_root)
+
+
+def build_and_save_window_index(
+    corpus_root: Path,
+    output: Path,
+    datasets_csv: str | None,
+    config: WindowIndexConfig,
+) -> None:
+    """Builds the canonical window index over `datasets_csv` (comma-separated,
+    or every univariate dataset if None) and saves it to `output`. Paired runs
+    (moment_normalized vs moment_original, MOMENT vs TimesFM, scale
+    assignment A vs B) must all train on the same base index (see
+    notes/05-timesfm-pretraining-loss-space-plan.md's "Canonical window
+    index" section); building it once here avoids every paired training job
+    independently re-scanning the corpus and risking a mismatch."""
+    domain_map = gc.load_domain_map()
+    dataset_names = (
+        datasets_csv.split(",")
+        if datasets_csv is not None
+        else gc.discover_dataset_dirs(corpus_root)
+    )
+    print(f"building window index over {len(dataset_names)} datasets ...")
+    print(
+        f"window_length = context_length + prediction_length = "
+        f"{config.context_length + config.prediction_length} raw points; "
+        "any series shorter than that contributes zero windows"
+    )
+    index = build_window_index(corpus_root, dataset_names, domain_map, config)
+    index.save(output)
+
+    n_train, n_val = len(index.split("train")), len(index.split("val"))
+    print(f"n_windows={len(index)} n_train={n_train} n_val={n_val}")
+
+    covered = set(index.table["dataset"].unique())
+    zero_window_datasets = sorted(set(dataset_names) - covered)
+    if zero_window_datasets:
+        print(
+            f"WARNING: {len(zero_window_datasets)} requested dataset(s) contributed "
+            f"zero windows (series too short for window_length, or all-multivariate): "
+            f"{zero_window_datasets}"
+        )
+    print(f"saved to {output}")

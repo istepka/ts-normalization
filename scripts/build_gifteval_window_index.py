@@ -1,11 +1,5 @@
-"""Pre-builds and caches the canonical GiftEvalPretrain window index.
-
-Paired runs (moment_normalized vs moment_original, MOMENT vs TimesFM, scale
-assignment A vs B) must all train on the same base index (see the plan's
-"Canonical window index" section and Data test "Paired conditions consume
-identical base windows"). Building it once here and passing the resulting
-parquet path via train.py's `window_index.cache_path` avoids every paired job
-independently re-scanning the corpus and risking a mismatch.
+"""CLI for src.tsfm_pretraining.window_index.build_and_save_window_index:
+pre-builds and caches the canonical GiftEvalPretrain window index.
 
 Usage:
   uv run python -m scripts.build_gifteval_window_index \
@@ -17,7 +11,6 @@ Usage:
 import argparse
 from pathlib import Path
 
-from src.tsfm_pretraining import gifteval_corpus as gc
 from src.tsfm_pretraining import window_index as wi
 
 
@@ -43,12 +36,6 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    domain_map = gc.load_domain_map()
-    dataset_names = (
-        args.datasets.split(",")
-        if args.datasets is not None
-        else gc.discover_dataset_dirs(args.corpus_root)
-    )
     config = wi.WindowIndexConfig(
         context_length=args.context_length,
         prediction_length=args.prediction_length,
@@ -58,27 +45,9 @@ def main() -> None:
         base_seed=args.base_seed,
         max_windows_per_series=args.max_windows_per_series,
     )
-    print(f"building window index over {len(dataset_names)} datasets ...")
-    print(
-        f"window_length = context_length + prediction_length = "
-        f"{args.context_length + args.prediction_length} raw points; "
-        "any series shorter than that contributes zero windows"
+    wi.build_and_save_window_index(
+        args.corpus_root, args.output, args.datasets, config
     )
-    index = wi.build_window_index(args.corpus_root, dataset_names, domain_map, config)
-    index.save(args.output)
-
-    n_train, n_val = len(index.split("train")), len(index.split("val"))
-    print(f"n_windows={len(index)} n_train={n_train} n_val={n_val}")
-
-    covered = set(index.table["dataset"].unique())
-    zero_window_datasets = sorted(set(dataset_names) - covered)
-    if zero_window_datasets:
-        print(
-            f"WARNING: {len(zero_window_datasets)} requested dataset(s) contributed "
-            f"zero windows (series too short for window_length, or all-multivariate): "
-            f"{zero_window_datasets}"
-        )
-    print(f"saved to {args.output}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from scripts import report_timesfm_robust as report
+from src.tsfm_pretraining import timesfm_robust_report as report
 
 
 def test_scale_effect_and_difference_in_differences_use_seed_replication():
