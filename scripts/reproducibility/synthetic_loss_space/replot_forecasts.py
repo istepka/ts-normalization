@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.plots import plot_forecast_evolution
+from src.loss_space.plots import plot_forecast_evolution
 
 out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "outputs/loss_space_toy")
 paper_dir = out_dir.parent / f"{out_dir.name}_paper"

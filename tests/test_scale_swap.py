@@ -27,8 +27,8 @@ from scripts.reproducibility.real_scale_swap.permutation_schedule import (
     assignment_pair,
     validate_schedule,
 )
-from src.data import RealScaleSwapDataset
-from src.train import Trainer
+from src.loss_space.data import RealScaleSwapDataset
+from src.loss_space.train import Trainer
 
 
 def scale_swap_cfg(paths, scales):

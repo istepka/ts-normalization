@@ -90,6 +90,7 @@ def _base_cfg(tiny_corpus, tmp_path, model: str) -> OmegaConf:
             },
             "train": {
                 "steps": 4,
+                "schedule_steps": None,
                 "batch_size": 4,
                 "lr": 1e-4,
                 "optimizer": "sgd",

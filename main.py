@@ -21,15 +21,16 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 
 import wandb
-from src.captions import write_captions
-from src.configs import ToyConfig, validate_config
-from src.data import (
+from src.configs import validate_config
+from src.loss_space.captions import write_captions
+from src.loss_space.configs import ToyConfig
+from src.loss_space.data import (
     RealScaleSwapDataset,
     RealShapeScaledDataset,
     RealVarianceBinnedDataset,
     SyntheticTSDataset,
 )
-from src.plots import (
+from src.loss_space.plots import (
     gif_forecast_evolution,
     gif_nmse_convergence,
     plot_forecast_evolution,
@@ -39,7 +40,7 @@ from src.plots import (
     plot_nmse_subfigures,
     plot_qualitative,
 )
-from src.train import Trainer
+from src.loss_space.train import Trainer
 
 SETUP_LABELS = ["normalized", "original", "original_equalvar", "original_gradmatch"]
 LR_ADJUSTED_LABEL = "original_lr_adjusted"

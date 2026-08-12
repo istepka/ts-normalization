@@ -2,7 +2,7 @@
 
 Runs exactly one (model, loss-space condition[, scale assignment]) combination
 per process invocation and reports to Weights & Biases, matching this
-project's existing convention (see src/train.py) of one wandb run per setup,
+project's existing convention (see src/loss_space/train.py) of one wandb run per setup,
 grouped by experiment tag; sbatch scripts loop over conditions/assignments the
 same way scripts/reproducibility/real_scale_swap does for scale-swap A/B.
 
@@ -26,7 +26,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 
 import wandb
-from src.configs import TsfmConfig, validate_config
+from src.configs import validate_config
 
 from . import chronos2_adapter as ca
 from . import gifteval_corpus as gc
@@ -35,12 +35,13 @@ from . import moirai2_adapter as m2
 from . import moment_adapter as ma
 from . import timesfm_model as tm
 from . import window_index as wi
+from .configs import TsfmConfig
 
 TIMESFM_CONFIGS = {"17m": tm.CONFIG_17M, "70m": tm.CONFIG_70M}
 # Fixed, not derived from cfg.seed -> the held-out eval sample (both the
 # natural-mixture pooled draw and the per-dataset stratified draw) is
 # identical across every checkpoint within a run and across every condition,
-# matching src/data.py's VAL_SEED convention ("the held-out validation set is
+# matching src/loss_space/data.py's VAL_SEED convention ("the held-out validation set is
 # identical across all runs"). Previously this was seeded by the current
 # step, which resampled a different validation subset at every checkpoint --
 # conflating real model progress with eval-sampling noise across the curve.
@@ -253,7 +254,9 @@ def run_moment(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
         index,
         "train",
         dataset_weights,
-        cfg.train.steps,
+        cfg.train.steps
+        if cfg.train.schedule_steps is None
+        else cfg.train.schedule_steps,
         cfg.train.batch_size,
         cfg.train.schedule_seed,
     )
@@ -381,7 +384,9 @@ def run_timesfm(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
         index,
         "train",
         dataset_weights,
-        cfg.train.steps,
+        cfg.train.steps
+        if cfg.train.schedule_steps is None
+        else cfg.train.schedule_steps,
         cfg.train.batch_size,
         cfg.train.schedule_seed,
     )
@@ -527,7 +532,9 @@ def run_chronos2(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
         index,
         "train",
         dataset_weights,
-        cfg.train.steps,
+        cfg.train.steps
+        if cfg.train.schedule_steps is None
+        else cfg.train.schedule_steps,
         cfg.train.batch_size,
         cfg.train.schedule_seed,
     )
@@ -654,7 +661,9 @@ def run_moirai2(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
         index,
         "train",
         dataset_weights,
-        cfg.train.steps,
+        cfg.train.steps
+        if cfg.train.schedule_steps is None
+        else cfg.train.schedule_steps,
         cfg.train.batch_size,
         cfg.train.schedule_seed,
     )

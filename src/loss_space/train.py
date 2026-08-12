@@ -13,9 +13,9 @@ import numpy as np
 import torch
 from omegaconf import DictConfig
 
-from src.data import SyntheticTSDataset
-from src.loss import compute_loss, normalize_target, per_sample_nmse
-from src.model import PatchTransformer
+from .data import SyntheticTSDataset
+from .loss import compute_loss, normalize_target, per_sample_nmse
+from .model import PatchTransformer
 
 
 class Trainer:

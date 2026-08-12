@@ -7,7 +7,9 @@ from omegaconf.errors import (
     ValidationError,
 )
 
-from src.configs import ToyConfig, TsfmConfig, validate_config
+from src.configs import validate_config
+from src.loss_space.configs import ToyConfig
+from src.tsfm_pretraining.configs import TsfmConfig
 
 
 def test_runtime_configs_compose_and_validate():

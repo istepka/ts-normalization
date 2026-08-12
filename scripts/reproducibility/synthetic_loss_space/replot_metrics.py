@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.plots import (
+from src.loss_space.plots import (
     plot_global_nmse,
     plot_grad_magnitude,
     plot_nmse_panels,

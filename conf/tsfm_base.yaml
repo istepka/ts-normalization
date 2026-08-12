@@ -24,6 +24,7 @@ window_index:
 dataset_weights: null
 
 train:
+  schedule_steps: null
   lr: 1.0e-4
   optimizer: adamw
   deterministic: true
