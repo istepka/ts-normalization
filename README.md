@@ -128,3 +128,29 @@ One-off scripts pinned to specific past run IDs (seed reruns, metric recomputes)
 #### `reproducibility/`
 
 Scripts backing specific paper experiments, organized by experiment line (e.g. `real_scale_swap/`, `synthetic_loss_space/`).
+
+## Output layout
+
+New outputs use the following path shape
+
+```text
+outputs/YYYY-MM-DD/<category>/<experiment>/<run>/
+```
+
+The categories are `experiments`, `analysis`, `visualizations`, `data`, and
+`diagnostics`. Training artifacts belong under `experiments`. Derived tables
+belong under `analysis`. Figures and replots belong under `visualizations` and
+keep the source experiment or run name in their path. The shared launchers use
+`scripts/output_paths.sh` and pass Hydra's run directory explicitly so Hydra
+metadata stays beside the artifacts it describes.
+
+The migration tool is dry-run by default
+
+```sh
+uv run python scripts/organize_outputs.py --before YYYY-MM-DD
+```
+
+Use `--exclude NAME` for any output still read or written by a live job.
+After checking the planned paths, add `--apply`. The tool refuses to overwrite
+an existing destination and writes `outputs/organization_manifest.json` after
+a successful migration.

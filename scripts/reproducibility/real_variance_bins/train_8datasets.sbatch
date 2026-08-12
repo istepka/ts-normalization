@@ -12,6 +12,9 @@
 set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
 mkdir -p logs
+source scripts/output_paths.sh
+
+RUN_ROOT="$(output_path experiments real_variance_binned "job-${SLURM_JOB_ID}")"
 
 data_root=/zfsauton2/home/istepka/sstc/experiments/h1/data
 datasets=(
@@ -43,11 +46,12 @@ aggregate_args=()
 for index in "${!datasets[@]}"; do
   dataset="${datasets[index]}"
   scale="${scales[index]}"
-  run_dir="outputs/${SLURM_JOB_ID}_${dataset}_loss_space_toy"
+  run_dir="${RUN_ROOT}/${dataset}"
   echo "running ${dataset} real_value_scale=${scale} output=${run_dir}"
   uv run python main.py \
     device=cuda \
     "output_dir=${run_dir}" \
+    "hydra.run.dir=${run_dir}" \
     "wandb.experiment=varbins8_${dataset}_splitfix" \
     data.kind=real_variance_binned \
     "data.real_shape_path=${data_root}/128_${dataset}.npz" \
@@ -56,7 +60,7 @@ for index in "${!datasets[@]}"; do
   aggregate_args+=("${dataset}=${run_dir}")
 done
 
-aggregate_dir="outputs/${SLURM_JOB_ID}_variance_bins_8datasets"
+aggregate_dir="$(output_path analysis real_variance_binned "job-${SLURM_JOB_ID}/variance_bins_8datasets")"
 uv run python scripts/reproducibility/real_variance_bins/aggregate.py \
   "${aggregate_args[@]}" \
   --output-dir="${aggregate_dir}"

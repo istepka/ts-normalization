@@ -3,7 +3,11 @@
 
 seeds: [0, 1, 2, 3, 4] # each setup is rerun once per seed; plots show mean +/- 1 band
 device: cpu
-output_dir: outputs/loss_space_toy
+output_dir: outputs/${now:%Y-%m-%d}/experiments/synthetic_loss_space/manual-${now:%H-%M-%S}
+
+hydra:
+  run:
+    dir: ${output_dir}
 setups: [normalized, original, original_equalvar, original_gradmatch]
 
 data:

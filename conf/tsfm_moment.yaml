@@ -8,7 +8,11 @@ defaults:
 
 model: moment
 condition: moment_original # moment_normalized | moment_original
-output_dir: outputs/tsfm_pretraining/moment
+output_dir: outputs/${now:%Y-%m-%d}/experiments/tsfm_pretraining/moment/manual-${now:%H-%M-%S}
+
+hydra:
+  run:
+    dir: ${output_dir}
 
 moment:
   # MOMENT-base: matches the published flan-t5-base backbone dims (d_model,

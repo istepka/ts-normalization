@@ -47,6 +47,7 @@
 set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
 mkdir -p logs
+source scripts/output_paths.sh
 
 case "${MODEL:-}" in
   moment | timesfm | chronos2 | moirai2) ;;
@@ -67,7 +68,9 @@ fi
 
 CONTEXT_LENGTH=${CONTEXT_LENGTH:-512}
 PREDICTION_LENGTH=${PREDICTION_LENGTH:-128}
-INDEX=${INDEX:-outputs/gifteval_window_index/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
+RUN_DATE=${RUN_DATE:-$(date +%F)}
+INDEX_DIR="$(output_path data gifteval_window_index canonical)"
+INDEX=${INDEX:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
 STEPS=${STEPS:-30000}
 BATCH_SIZE=${BATCH_SIZE:-512}
 CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-6000}
@@ -78,6 +81,7 @@ SEED=${SEED:-0}
 SEEDS_CSV=${SEEDS_CSV:-0,1,2,3}
 CONFIG_SIZE=${CONFIG_SIZE:-70m}
 JOBTAG=${JOBTAG:-gifteval_${MODEL}_${SLURM_ARRAY_JOB_ID}}
+RUN_ROOT="$(output_path experiments "tsfm_pretraining/${MODEL}" "${JOBTAG}")"
 
 if [ ! -f "${INDEX}" ]; then
   echo "ERROR: window index not found at ${INDEX}." >&2
@@ -138,11 +142,11 @@ else
 fi
 
 if [ "${MODEL}" = "chronos2" ] || [ "${MODEL}" = "moirai2" ]; then
-  run_dir="outputs/${JOBTAG}_seed${SEED}_${CONDITION}_${ASSIGNMENT}"
+  run_dir="${RUN_ROOT}/seed${SEED}_${CONDITION}_${ASSIGNMENT}"
 elif [ "${KIND}" = "controlled_scale" ]; then
-  run_dir="outputs/${JOBTAG}_scale_${CONDITION}_${ASSIGNMENT}"
+  run_dir="${RUN_ROOT}/scale_${CONDITION}_${ASSIGNMENT}"
 else
-  run_dir="outputs/${JOBTAG}_natural_${CONDITION}"
+  run_dir="${RUN_ROOT}/natural_${CONDITION}"
 fi
 
 if [ "${MODEL}" = "timesfm" ]; then
@@ -166,4 +170,5 @@ PYTHONPATH=. uv run python -m src.tsfm_pretraining.train \
   "train.eval_batches=${EVAL_BATCHES}" \
   "train.eval_windows_per_dataset=${EVAL_WINDOWS_PER_DATASET}" \
   "wandb.experiment=${JOBTAG}" \
-  "output_dir=${run_dir}"
+  "output_dir=${run_dir}" \
+  "hydra.run.dir=${run_dir}"

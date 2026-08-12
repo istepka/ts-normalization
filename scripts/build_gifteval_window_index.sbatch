@@ -25,12 +25,16 @@
 
 set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
-mkdir -p logs outputs/gifteval_window_index
+mkdir -p logs
+source scripts/output_paths.sh
 
+RUN_DATE=${RUN_DATE:-$(date +%F)}
 CONTEXT_LENGTH=${CONTEXT_LENGTH:-512}
 PREDICTION_LENGTH=${PREDICTION_LENGTH:-128}
 STRIDE=${STRIDE:-512}
-OUTPUT=${OUTPUT:-outputs/gifteval_window_index/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
+INDEX_DIR="$(output_path data gifteval_window_index canonical)"
+OUTPUT=${OUTPUT:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
+mkdir -p "$(dirname "${OUTPUT}")"
 
 uv run python -m scripts.build_gifteval_window_index \
   --corpus-root /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full \

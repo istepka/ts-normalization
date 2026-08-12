@@ -8,7 +8,11 @@ defaults:
 
 model: chronos2
 condition: chronos2_normalized # chronos2_normalized | chronos2_original
-output_dir: outputs/tsfm_pretraining/chronos2
+output_dir: outputs/${now:%Y-%m-%d}/experiments/tsfm_pretraining/chronos2/manual-${now:%H-%M-%S}
+
+hydra:
+  run:
+    dir: ${output_dir}
 
 chronos2:
   # Official Chronos-2 Small dimensions, about 28M parameters.

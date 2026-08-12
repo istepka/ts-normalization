@@ -9,7 +9,11 @@ defaults:
 
 model: timesfm
 condition: timesfm_native_original # timesfm_native_original | timesfm_normalized
-output_dir: outputs/tsfm_pretraining/timesfm
+output_dir: outputs/${now:%Y-%m-%d}/experiments/tsfm_pretraining/timesfm/manual-${now:%H-%M-%S}
+
+hydra:
+  run:
+    dir: ${output_dir}
 
 timesfm:
   config_size: 17m # 17m (smoke test) | 70m (primary run)

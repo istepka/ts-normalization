@@ -24,6 +24,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p logs
+source scripts/output_paths.sh
+
+RUN_DATE=${RUN_DATE:-$(date +%F)}
+export RUN_DATE
 
 case "${MODEL:-}" in
   moment | timesfm) default_batch_size=512 ;;
@@ -41,7 +45,8 @@ if [ "${MODEL}" = "timesfm" ]; then
 else
   export PREDICTION_LENGTH=${PREDICTION_LENGTH:-128}
 fi
-export INDEX=${INDEX:-outputs/gifteval_window_index/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
+INDEX_DIR="$(output_path data gifteval_window_index canonical)"
+export INDEX=${INDEX:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
 export STEPS=${STEPS:-30000}
 export BATCH_SIZE=${BATCH_SIZE:-$default_batch_size}
 export CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-6000}

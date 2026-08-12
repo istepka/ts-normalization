@@ -15,7 +15,11 @@ defaults:
 
 model: moirai2
 condition: moirai2_normalized # moirai2_normalized | moirai2_original
-output_dir: outputs/tsfm_pretraining/moirai2
+output_dir: outputs/${now:%Y-%m-%d}/experiments/tsfm_pretraining/moirai2/manual-${now:%H-%M-%S}
+
+hydra:
+  run:
+    dir: ${output_dir}
 
 moirai2:
   # Official Moirai-2.0-R-small dimensions, about 5M parameters.

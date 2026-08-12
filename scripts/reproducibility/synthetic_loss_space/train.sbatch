@@ -12,6 +12,7 @@
 set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
 mkdir -p logs
+source scripts/output_paths.sh
 
 # Duplicate-submission guard: if another job with the same name is queued/running,
 # only the one with the lowest JobID proceeds; the rest exit immediately. This is
@@ -27,11 +28,15 @@ done
 
 # Job-ID-prefixed output dir so concurrent variants never collide; the paper dir
 # (`${RUN_DIR}_paper`) inherits the same prefix automatically.
-RUN_DIR="outputs/${SLURM_JOB_ID}_loss_space_toy"
+RUN_DIR="$(output_path experiments synthetic_loss_space "job-${SLURM_JOB_ID}")"
 
 # Any extra args are passed through as Hydra overrides, e.g. a longer variant:
 #   sbatch --job-name=loss_space_100k scripts/reproducibility/synthetic_loss_space/train.sbatch train.steps=100000
 # (give a distinct --job-name when running variants concurrently, so the guard
 # above does not treat them as duplicates of each other).
-uv run python main.py device=cuda output_dir="$RUN_DIR" "$@"
+uv run python main.py \
+  device=cuda \
+  "output_dir=${RUN_DIR}" \
+  "hydra.run.dir=${RUN_DIR}" \
+  "$@"
 echo "outputs: $RUN_DIR  (paper: ${RUN_DIR}_paper)"
