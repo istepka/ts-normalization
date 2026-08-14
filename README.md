@@ -74,7 +74,9 @@ re-running a script on unchanged data leaves the file byte identical. Panels
 meant to be typeset side by side pass `bbox_inches=None` so their axes stay
 aligned. `tsfm_runs.py`
 has the four-model run registry and the history readers. `loss_space.py` has the
-synthetic loss-space toy figures.
+loss-space experiment figures, shared by the synthetic toy and the real-data
+variants (scale swap, variance bins), and `loss_space_captions.py` the paper
+captions written next to each paper PDF.
 
 `scripts/` holds the entry points
 

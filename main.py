@@ -22,7 +22,6 @@ from omegaconf import DictConfig, OmegaConf
 
 import wandb
 from src.configs import validate_config
-from src.loss_space.captions import write_captions
 from src.loss_space.configs import ToyConfig
 from src.loss_space.data import (
     RealScaleSwapDataset,
@@ -41,6 +40,7 @@ from src.plotting.core.loss_space import (
     plot_nmse_subfigures,
     plot_qualitative,
 )
+from src.plotting.core.loss_space_captions import write_captions
 
 SETUP_LABELS = ["normalized", "original", "original_equalvar", "original_gradmatch"]
 LR_ADJUSTED_LABEL = "original_lr_adjusted"

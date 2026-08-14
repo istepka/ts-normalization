@@ -30,7 +30,10 @@ other scripts imported from, and the synthetic-toy figures sat in
   does not misalign their axes.
 - `tsfm_runs.py` has the four-model `MODELS` registry, `COLORS`, `LABELS`,
   `LOSS_SPACES`, the history readers, and `capped_gini`.
-- `loss_space.py` is the former `src/loss_space/plots.py`.
+- `loss_space.py` is the former `src/loss_space/plots.py`, and
+  `loss_space_captions.py` the former `src/loss_space/captions.py`, which
+  writes each paper figure's caption next to its PDF. Both serve every
+  loss-space run, synthetic and real-data alike, not just the synthetic toy.
 
 `src/plotting/scripts/` holds the entry points, run as modules
 (`uv run python -m src.plotting.scripts.<name>`): the three `plot_tsfm_*`

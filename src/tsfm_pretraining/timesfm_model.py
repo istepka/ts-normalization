@@ -413,15 +413,9 @@ def training_step_metrics(
             result.mse_per_example.detach().mean()
             / result.pinball_per_example.detach().mean().clamp_min(1e-12)
         ),
-        "output_head_grad_norm": gradient_metrics[
-            "tracked_norm_before_clip"
-        ],
-        "total_grad_norm_before_clip": gradient_metrics[
-            "total_norm_before_clip"
-        ],
-        "total_grad_norm_after_clip": gradient_metrics[
-            "total_norm_after_clip"
-        ],
+        "output_head_grad_norm": gradient_metrics["tracked_norm_before_clip"],
+        "total_grad_norm_before_clip": gradient_metrics["total_norm_before_clip"],
+        "total_grad_norm_after_clip": gradient_metrics["total_norm_after_clip"],
         "clipped": gradient_metrics["clipped"],
         "step_skipped": False,
         "degenerate_frac": float(result.degenerate.float().mean()),
