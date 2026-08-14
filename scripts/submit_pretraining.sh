@@ -30,8 +30,7 @@ RUN_DATE=${RUN_DATE:-$(date +%F)}
 export RUN_DATE
 
 case "${MODEL:-}" in
-  moment | timesfm) default_batch_size=512 ;;
-  chronos2 | moirai2) default_batch_size=128 ;;
+  moment | timesfm | chronos2 | moirai2) ;;
   *)
     echo "ERROR: MODEL must be set to moment, timesfm, chronos2, or moirai2" >&2
     exit 1
@@ -50,7 +49,7 @@ fi
 INDEX_DIR=${INDEX_DIR:-outputs/gifteval_window_index}
 export INDEX=${INDEX:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
 export STEPS=${STEPS:-30000}
-export BATCH_SIZE=${BATCH_SIZE:-$default_batch_size}
+export BATCH_SIZE=${BATCH_SIZE:-512}
 export CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-6000}
 export EVAL_EVERY=${EVAL_EVERY:-250}
 export EVAL_BATCHES=${EVAL_BATCHES:-50}
@@ -100,4 +99,4 @@ AGG_JOB=$(sbatch --parsable --job-name="gifteval_${MODEL}_aggregate" \
   --dependency="afterok:${ARRAY_JOB}" \
   scripts/aggregate_pretraining.sbatch)
 echo "aggregate job: ${AGG_JOB} (depends on ${ARRAY_JOB} completing ok)"
-echo "outputs will land under outputs/${JOBTAG}_*"
+echo "outputs will land under $(output_path experiments "tsfm_pretraining/${MODEL}" "${JOBTAG}")"

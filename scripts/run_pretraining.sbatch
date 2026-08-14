@@ -37,10 +37,9 @@
 # Tuned against the real corpus on this cluster's H200 (see
 # notes/agentic_logs): every model plateaus in windows/sec well before 85%
 # VRAM utilization -- pushing batch size further trades away gradient-update
-# frequency for a shrinking throughput return and risks OOM. BATCH_SIZE
-# below defaults to MOMENT/TimesFM's measured sweet spot; override with
-# BATCH_SIZE=<n> (scripts/submit_pretraining.sh defaults it lower for
-# Chronos-2/Moirai-2.0, whose larger backbones need it). TimesFM's
+# frequency for a shrinking throughput return and risks OOM. Every model
+# defaults to 512, which all four have trained at; override with
+# BATCH_SIZE=<n>. TimesFM's
 # window_index prediction_length must stay 128 to match every TimesFM
 # config's horizon_len; only context_length is meant to be tuned.
 
