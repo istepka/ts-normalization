@@ -80,9 +80,11 @@ helpers in `data/windows.py`.
 
 `losses/` separates the objectives by convention rather than by model.
 `pointwise.py` has the masked MSE and MAE every adapter scores with.
-`quantile.py` keeps two forms rather than one, since `crps_quantile_loss` is
-twice `pinball_loss` and sums over quantile levels rather than averaging them.
-Merging the two would rescale the gradients of whichever model lost its form.
+`quantile.py` has two functions, not one: `pinball_loss` averages over quantile
+levels (uni2ts `PackedQuantileMAELoss`, so Moirai 2.0) and `crps_quantile_loss`
+doubles and sums over them instead (Chronos-2). They differ by 2Q, so each
+adapter uses its own model's published form. `tests/test_losses.py` pins both
+against transcriptions of the upstream source.
 
 `metrics/` is the single source for anything reported: `forecast.py` for
 per-window error, `inequality.py` for Gini and the per-source breakdowns,

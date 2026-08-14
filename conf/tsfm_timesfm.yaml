@@ -19,7 +19,9 @@ timesfm:
   config_size: 17m # 17m (smoke test) | 70m (primary run)
   grad_clip_norm: 1.0
   normalization_mode: first_patch # first_patch | whole_context
-  objective: combined # mse | combined
+  # The paper trains the point forecast with MSE. `combined` adds pinball over
+  # the quantile heads, which was this project's own addition.
+  objective: mse # mse | combined
 
 train:
   steps: 2000

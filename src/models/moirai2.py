@@ -252,10 +252,15 @@ def forward(
     else:
         predictions = normalized_preds * scale.view(-1, 1, 1) + loc.view(-1, 1, 1)
         target = future_target
-    quantiles = torch.as_tensor(
-        model.quantile_levels, device=predictions.device, dtype=predictions.dtype
+    # uni2ts PackedQuantileMAELoss: pinball averaged over quantile levels, no
+    # CRPS factor of 2. Chronos-2's loss sums and doubles instead.
+    loss = quantile.pinball_loss(
+        predictions.transpose(1, 2),  # [B, Q, H] -> [B, H, Q]
+        target,
+        model.quantile_levels,
+        valid=future_valid,
+        reduction="none",
     )
-    loss = quantile.crps_quantile_loss(predictions, target, future_valid, quantiles)
 
     median_index = model.quantile_levels.index(0.5)
     original_point = normalized_preds[:, median_index] * scale.unsqueeze(-1) + (

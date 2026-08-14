@@ -1,8 +1,9 @@
-"""Quantile objectives.
+"""Quantile objectives, one per upstream convention.
 
-Two conventions are in use and they differ by more than a constant, so the
-adapters that need each one keep calling their own. `crps_quantile_loss` is
-twice `pinball_loss` and sums over quantile levels rather than averaging.
+`pinball_loss` averages the plain pinball loss over quantile levels, matching
+uni2ts `PackedQuantileMAELoss` (Moirai 2.0). `crps_quantile_loss` doubles it
+and sums over levels instead, matching Chronos-2. On the same inputs they
+differ by 2Q, so each adapter must use its own model's form.
 """
 
 import torch

@@ -181,3 +181,62 @@ def test_safe_gradient_clipping_restores_unclipped_gradient():
     assert np.isclose(metrics["total_norm_after_clip"], 4.0)
     assert np.isclose(float(parameter.grad), 4.0)
     assert not metrics["clipped"]
+
+
+def test_pinball_loss_matches_uni2ts_packed_quantile_mae():
+    """Moirai 2.0's objective: pinball averaged over levels, no factor of 2."""
+    levels = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    torch.manual_seed(0)
+    pred = torch.randn(6, len(levels), 11, dtype=torch.float64)
+    target = torch.randn(6, 11, dtype=torch.float64)
+    valid = torch.ones(6, 11, dtype=torch.float64)
+
+    # Transcribed from uni2ts/loss/packed/quantile.py PackedQuantileMAELoss.
+    q = torch.tensor(levels, dtype=torch.float64).view(1, -1, 1)
+    expanded = target.unsqueeze(1).expand_as(pred)
+    errors = (pred - expanded).abs()
+    reference = torch.where(expanded > pred, q * errors, (1 - q) * errors)
+    reference = reference.mean(dim=-2).mean(dim=-1)
+
+    actual = quantile.pinball_loss(
+        pred.transpose(1, 2), target, levels, valid=valid, reduction="none"
+    )
+    assert torch.allclose(actual, reference)
+
+
+def test_crps_quantile_loss_matches_chronos2():
+    """Chronos-2's objective: twice pinball, summed over levels."""
+    levels = [0.1, 0.5, 0.9]
+    torch.manual_seed(1)
+    pred = torch.randn(4, len(levels), 7, dtype=torch.float64)
+    target = torch.randn(4, 7, dtype=torch.float64)
+    valid = torch.ones(4, 7, dtype=torch.float64)
+    q = torch.tensor(levels, dtype=torch.float64)
+
+    # Transcribed from chronos/chronos2/model.py _compute_loss.
+    expanded = target.unsqueeze(1)
+    reference = 2 * torch.abs(
+        (expanded - pred) * ((expanded <= pred).double() - q.view(1, -1, 1))
+    )
+    reference = reference.mean(dim=-1).sum(dim=-1)
+
+    assert torch.allclose(
+        quantile.crps_quantile_loss(pred, target, valid, q), reference
+    )
+
+
+def test_the_two_quantile_conventions_differ_by_two_q():
+    """Guards against collapsing them back into one function."""
+    levels = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    torch.manual_seed(2)
+    pred = torch.randn(5, len(levels), 9, dtype=torch.float64)
+    target = torch.randn(5, 9, dtype=torch.float64)
+    valid = torch.ones(5, 9, dtype=torch.float64)
+
+    crps = quantile.crps_quantile_loss(
+        pred, target, valid, torch.tensor(levels, dtype=torch.float64)
+    )
+    pinball = quantile.pinball_loss(
+        pred.transpose(1, 2), target, levels, valid=valid, reduction="none"
+    )
+    assert torch.allclose(crps / pinball, torch.full_like(crps, 2.0 * len(levels)))
