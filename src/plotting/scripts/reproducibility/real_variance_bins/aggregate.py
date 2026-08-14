@@ -18,6 +18,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.plotting.core import GLOBAL_STYLE
+from src.plotting.core import mean_ci as base_mean_ci
+from src.plotting.core import save_figure as save_base_figure
+
 SETUP_LABELS = [
     "normalized",
     "original",
@@ -25,8 +29,6 @@ SETUP_LABELS = [
     "original_gradmatch",
 ]
 NUM_DATASETS = 8
-T_CRITICAL_95_DF7 = 2.364624251
-GLOBAL_STYLE = {"color": "0.35", "linestyle": "--", "linewidth": 1.6}
 
 
 def parse_args():
@@ -75,19 +77,11 @@ def stack_dataset_means(datasets: list[dict], label: str, key: str) -> np.ndarra
 def mean_ci(values: np.ndarray, log_space: bool) -> tuple[np.ndarray, ...]:
     if values.shape[0] != NUM_DATASETS:
         raise ValueError(f"expected {NUM_DATASETS} datasets")
-    work = np.log10(values) if log_space else values
-    center = work.mean(axis=0)
-    half = T_CRITICAL_95_DF7 * work.std(axis=0, ddof=1) / np.sqrt(NUM_DATASETS)
-    if log_space:
-        return 10**center, 10 ** (center - half), 10 ** (center + half)
-    return center, center - half, center + half
+    return base_mean_ci(values, log_space=log_space)
 
 
 def save_figure(fig, output_path: Path):
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150)
-    fig.savefig(output_path.with_suffix(".pdf"))
-    plt.close(fig)
+    save_base_figure(fig, output_path, dpi=150, tight_layout=True, bbox_inches=None)
 
 
 def plot_nmse_panels(

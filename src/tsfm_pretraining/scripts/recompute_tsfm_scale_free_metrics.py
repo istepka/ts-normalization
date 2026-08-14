@@ -3,7 +3,7 @@ metrics (nMSE, MASE) from saved checkpoints. See that module's docstring for
 why this recompute is needed.
 
 Usage:
-  uv run python -m scripts.recompute_tsfm_scale_free_metrics \
+  uv run python -m src.tsfm_pretraining.scripts.recompute_tsfm_scale_free_metrics \
       --run moment_original_A=outputs/gifteval_moment_..._A \
       --run moment_original_B=outputs/gifteval_moment_..._B \
       --output-dir outputs/scale_free_metrics

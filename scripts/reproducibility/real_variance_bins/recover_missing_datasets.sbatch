@@ -49,7 +49,7 @@ for index in "${!datasets[@]}"; do
 done
 
 aggregate_dir="outputs/${SLURM_JOB_ID}_variance_bins_8datasets"
-uv run python scripts/reproducibility/real_variance_bins/aggregate.py \
+uv run python -m src.plotting.scripts.reproducibility.real_variance_bins.aggregate \
   "${aggregate_args[@]}" \
   --output-dir="${aggregate_dir}"
 

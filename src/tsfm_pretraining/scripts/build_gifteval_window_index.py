@@ -2,7 +2,7 @@
 pre-builds and caches the canonical GiftEvalPretrain window index.
 
 Usage:
-  uv run python -m scripts.build_gifteval_window_index \
+  uv run python -m src.tsfm_pretraining.scripts.build_gifteval_window_index \
       --corpus-root /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full \
       --output outputs/gifteval_window_index/context512_pred128.parquet \
       --context-length 512 --prediction-length 128 --stride 512
@@ -45,9 +45,7 @@ def main() -> None:
         base_seed=args.base_seed,
         max_windows_per_series=args.max_windows_per_series,
     )
-    wi.build_and_save_window_index(
-        args.corpus_root, args.output, args.datasets, config
-    )
+    wi.build_and_save_window_index(args.corpus_root, args.output, args.datasets, config)
 
 
 if __name__ == "__main__":

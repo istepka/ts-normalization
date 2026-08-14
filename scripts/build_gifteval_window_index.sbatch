@@ -36,7 +36,7 @@ INDEX_DIR="$(output_path data gifteval_window_index canonical)"
 OUTPUT=${OUTPUT:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
 mkdir -p "$(dirname "${OUTPUT}")"
 
-uv run python -m scripts.build_gifteval_window_index \
+uv run python -m src.tsfm_pretraining.scripts.build_gifteval_window_index \
   --corpus-root /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full \
   --output "${OUTPUT}" \
   --context-length "${CONTEXT_LENGTH}" \

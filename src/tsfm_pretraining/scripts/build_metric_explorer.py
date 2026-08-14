@@ -3,7 +3,7 @@ metric explorer from a recomputed metrics directory. See that module's
 docstring for details.
 
 Usage:
-  uv run python -m scripts.build_metric_explorer \
+  uv run python -m src.tsfm_pretraining.scripts.build_metric_explorer \
       --metrics-dir outputs/tsfm_scale_free_metrics_v2 \
       --template <template>.html --out <page>.html
 """

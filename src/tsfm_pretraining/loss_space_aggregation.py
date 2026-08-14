@@ -15,7 +15,8 @@ of run output directories and produces:
 
 This module only produces numbers, not figures, following this project's
 existing separation between aggregate scripts (numbers) and replot scripts
-(figures) -- see scripts/reproducibility/synthetic_loss_space/replot_metrics.py.
+(figures) -- see
+src/plotting/scripts/reproducibility/synthetic_loss_space/replot_metrics.py.
 """
 
 import json

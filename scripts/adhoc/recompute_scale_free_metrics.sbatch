@@ -12,7 +12,7 @@
 # Rescores every saved checkpoint of the 12 GiftEvalPretrain runs on
 # scale-free metrics (nMSE, MASE), replacing the original per-variant
 # training-space MSE that made the normalized and original variants
-# incomparable. See scripts/recompute_tsfm_scale_free_metrics.py.
+# incomparable. See src/tsfm_pretraining/scripts/recompute_tsfm_scale_free_metrics.py.
 
 set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
@@ -21,7 +21,7 @@ mkdir -p logs
 MOMENT_TAG=gifteval_moment_26371
 TIMESFM_TAG=gifteval_timesfm_fixed
 
-uv run python -m scripts.recompute_tsfm_scale_free_metrics \
+uv run python -m src.tsfm_pretraining.scripts.recompute_tsfm_scale_free_metrics \
   --run "moment_normalized_natural=outputs/${MOMENT_TAG}_natural_moment_normalized" \
   --run "moment_original_natural=outputs/${MOMENT_TAG}_natural_moment_original" \
   --run "moment_normalized_A=outputs/${MOMENT_TAG}_scale_moment_normalized_A" \

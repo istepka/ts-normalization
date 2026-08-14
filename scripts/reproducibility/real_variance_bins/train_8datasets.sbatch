@@ -61,7 +61,7 @@ for index in "${!datasets[@]}"; do
 done
 
 aggregate_dir="$(output_path analysis real_variance_binned "job-${SLURM_JOB_ID}/variance_bins_8datasets")"
-uv run python scripts/reproducibility/real_variance_bins/aggregate.py \
+uv run python -m src.plotting.scripts.reproducibility.real_variance_bins.aggregate \
   "${aggregate_args[@]}" \
   --output-dir="${aggregate_dir}"
 

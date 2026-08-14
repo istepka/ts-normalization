@@ -4,7 +4,7 @@ Lets us restyle/zoom the curves without retraining: `main.py` dumps
 `metrics_{label}.npz` per run, and this script reloads them and re-renders the core,
 controls, global, and gradient-magnitude figures (log + zoomed-linear).
 
-    uv run python -m scripts.reproducibility.synthetic_loss_space.replot_metrics [output_dir] [zoom1,zoom2,...]
+    uv run python -m src.plotting.scripts.reproducibility.synthetic_loss_space.replot_metrics [output_dir] [zoom1,zoom2,...]
 
 Paper: regenerates Fig. loss_space_comp:synthetic and
 Fig. loss_space_comp:synthetic:global, and the metrics_*.npz files that
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.loss_space.plots import (
+from src.plotting.core.loss_space import (
     plot_global_nmse,
     plot_grad_magnitude,
     plot_nmse_panels,

@@ -13,9 +13,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Patch
 from scipy.stats import ttest_rel, wilcoxon
 
-from scripts.reproducibility.real_scale_swap.permutation_schedule import (
+from src.plotting.core import PRIMARY, SECONDARY, mean_ci
+from src.plotting.core import save_figure as save_base_figure
+from src.scripts.permutation_schedule import (
     HIGH_SCALE,
     LOW_SCALE,
     assignment_pair,
@@ -26,14 +29,14 @@ NORMALIZED_MODE = "normalized"
 MODE = "original_lr_adjusted"
 NUM_PAIRS = 15
 NUM_DATASETS = 8
-T_CRITICAL_95_DF14 = 2.144786688
+LEGACY_ROOT = Path("outputs/2026-07-17/experiments/legacy_runs")
 PAIR_ONE_ORIGINAL_PATHS = (
-    Path("outputs/18985_scale_swap_lr_adjusted_a"),
-    Path("outputs/18985_scale_swap_lr_adjusted_b"),
+    LEGACY_ROOT / "18985_scale_swap_lr_adjusted_a",
+    LEGACY_ROOT / "18985_scale_swap_lr_adjusted_b",
 )
 PAIR_ONE_NORMALIZED_PATHS = (
-    Path("outputs/18948_scale_swap_a"),
-    Path("outputs/18948_scale_swap_b"),
+    LEGACY_ROOT / "18948_scale_swap_a",
+    LEGACY_ROOT / "18948_scale_swap_b",
 )
 
 
@@ -143,31 +146,21 @@ def holm_adjust(p_values: np.ndarray) -> np.ndarray:
     return adjusted
 
 
-def mean_ci(values: np.ndarray) -> tuple[np.ndarray, ...]:
-    mean = values.mean(axis=0)
-    half = T_CRITICAL_95_DF14 * values.std(axis=0, ddof=1) / np.sqrt(NUM_PAIRS)
-    return mean, mean - half, mean + half
-
-
 def save_figure(fig, path: Path):
-    fig.tight_layout()
-    fig.savefig(path, dpi=150)
-    fig.savefig(path.with_suffix(".pdf"))
-    plt.close(fig)
+    save_base_figure(fig, path, dpi=150, tight_layout=True, bbox_inches=None)
 
 
 def plot_aggregate(campaign: dict, output_path: Path):
     fig, ax = plt.subplots(figsize=(7.2, 4.5))
     steps = campaign["steps"]
     for curves, label, color in (
-        (campaign["low"], "assigned $b=1$", "tab:blue"),
-        (campaign["high"], "assigned $b=10$", "tab:orange"),
+        (campaign["low"], "assigned $b=1$", SECONDARY),
+        (campaign["high"], "assigned $b=10$", PRIMARY),
     ):
         dataset_curves = curves.mean(axis=0)
-        mean = dataset_curves.mean(axis=0)
-        half = 2.364624251 * dataset_curves.std(axis=0, ddof=1) / np.sqrt(NUM_DATASETS)
+        mean, lower, upper = mean_ci(dataset_curves)
         ax.plot(steps, mean, color=color, label=label)
-        ax.fill_between(steps, mean - half, mean + half, color=color, alpha=0.2)
+        ax.fill_between(steps, lower, upper, color=color, alpha=0.2)
     ax.set_xlabel("step")
     ax.set_ylabel("nMSE")
     ax.set_ylim(bottom=0.0)
@@ -201,8 +194,8 @@ def plot_by_dataset(campaigns: dict[str, dict], output_path: Path):
                 continue
             campaign = campaigns[mode]
             for curves, scale_label, color in (
-                (campaign["low"], "$b=1$", "tab:blue"),
-                (campaign["high"], "$b=10$", "tab:orange"),
+                (campaign["low"], "$b=1$", SECONDARY),
+                (campaign["high"], "$b=10$", PRIMARY),
             ):
                 mean, lower, upper = mean_ci(curves[:, dataset])
                 ax.plot(
@@ -238,14 +231,15 @@ def plot_by_dataset(campaigns: dict[str, dict], output_path: Path):
 
 
 def plot_paired_auc(campaigns: dict[str, dict], output_path: Path):
+    """Write one bar-chart panel per mode plus a shared legend, all sharing the
+    same y limits so the panels can be typeset as subfigures."""
     modes = (
-        (NORMALIZED_MODE, "Normalized-space loss"),
-        (MODE, "LR-adjusted original-space loss"),
+        (NORMALIZED_MODE, "normalized"),
+        (MODE, "lr_adjusted"),
     )
     available_modes = [mode for mode, _ in modes if mode in campaigns]
     if not available_modes:
         raise ValueError("at least one campaign is required")
-    colors = plt.get_cmap("tab10").colors
     display_names = (
         "Electricity",
         "Traffic",
@@ -256,42 +250,53 @@ def plot_paired_auc(campaigns: dict[str, dict], output_path: Path):
         "KDD 2018",
         "FRED-MD",
     )
-    fig, axes = plt.subplots(
-        1,
-        len(available_modes),
-        figsize=(7.2 * len(available_modes), 2.7),
-        squeeze=False,
+    x = np.arange(NUM_DATASETS)
+    width = 0.38
+    bars = (
+        ("low", -width / 2, "$b=1$", SECONDARY),
+        ("high", width / 2, "$b=10$", PRIMARY),
     )
-    for ax, mode in zip(axes.flat, available_modes):
+    top = 0.0
+    for mode in available_modes:
         campaign = campaigns[mode]
-        low_auc = linear_auc(campaign["low"], campaign["steps"])
-        high_auc = linear_auc(campaign["high"], campaign["steps"])
-        ax.set_title(dict(modes)[mode], fontsize=10)
-        for dataset in range(NUM_DATASETS):
-            ax.plot(
-                [0, 1],
-                [low_auc[:, dataset].mean(), high_auc[:, dataset].mean()],
-                color=colors[dataset],
-                marker="o",
-                linewidth=1.5,
-                label=display_names[dataset],
+        for key, _, _, _ in bars:
+            mean, _, upper = mean_ci(linear_auc(campaign[key], campaign["steps"]))
+            top = max(top, upper.max())
+    top *= 1.08
+    for mode in available_modes:
+        campaign = campaigns[mode]
+        fig, ax = plt.subplots(figsize=(5.4, 3.0))
+        for key, offset, label, color in bars:
+            mean, lower, upper = mean_ci(linear_auc(campaign[key], campaign["steps"]))
+            ax.bar(
+                x + offset,
+                mean,
+                width,
+                yerr=np.stack((mean - lower, upper - mean)),
+                label=label,
+                color=color,
+                error_kw={"linewidth": 1.0, "capsize": 2.0},
             )
-        ax.set_xticks([0, 1], ["$b=1$", "$b=10$"])
+        ax.set_ylim(0.0, top)
         ax.set_ylabel("full-training nMSE AUC")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
+        ax.set_xticks(x, display_names, rotation=35, ha="right", fontsize=8)
+        ax.tick_params(axis="x", length=0)
+        ax.grid(axis="y", color="0.85", linewidth=0.7)
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        fig.tight_layout()
+        save_figure(
+            fig, output_path.with_name(f"{output_path.stem}_{dict(modes)[mode]}.png")
+        )
+    fig = plt.figure(figsize=(5.4, 0.35))
     fig.legend(
-        loc="center right",
-        bbox_to_anchor=(0.99, 0.5),
-        ncol=1,
+        handles=[Patch(color=color, label=label) for _, _, label, color in bars],
+        loc="center",
+        ncol=len(bars),
         frameon=False,
-        fontsize=8,
     )
-    right = 0.79 if len(available_modes) == 1 else 0.84
-    fig.tight_layout(rect=(0.0, 0.0, right, 1.0))
-    fig.savefig(output_path, dpi=150)
-    fig.savefig(output_path.with_suffix(".pdf"))
-    plt.close(fig)
+    save_figure(fig, output_path.with_name(f"{output_path.stem}_shared_legend.png"))
 
 
 def build_summary(campaign: dict) -> dict:

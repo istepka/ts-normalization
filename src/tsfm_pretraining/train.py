@@ -895,8 +895,8 @@ def main(cfg: DictConfig) -> None:
     # index came from a fresh build or a pre-built cache_path. When datasets
     # is null, "requested" nominally means "every corpus dataset", but a
     # loaded cache may have been built from a smaller --datasets restriction
-    # (see scripts/build_gifteval_window_index.py) that this process has no
-    # way to recover -- comparing against the full corpus discovery in that
+    # (see src/tsfm_pretraining/scripts/build_gifteval_window_index.py)
+    # that this process has no way to recover -- comparing against the full corpus discovery in that
     # case produces a bogus "N datasets contributed zero windows" warning for
     # datasets that were simply never part of this index's build, not
     # filtered out by window_length.

@@ -21,7 +21,7 @@ fi
 printf -v pair_tag '%02d' "${pair_index}"
 
 for arm in a b; do
-  assignment="$(uv run python scripts/reproducibility/real_scale_swap/permutation_schedule.py \
+  assignment="$(uv run python -m src.scripts.permutation_schedule \
     --pair-index="${pair_index}" --arm="${arm}")"
   run_dir="outputs/scale_swap_permutations/pair_${pair_tag}_${arm}"
   if [[ -e "${run_dir}" ]]; then

@@ -38,7 +38,7 @@ for index in "${!labels[@]}"; do
 done
 
 aggregate_dir="$(output_path analysis real_scale_swap "job-${SLURM_JOB_ID}/scale_swap_8datasets")"
-uv run python scripts/reproducibility/real_scale_swap/aggregate_crossover.py \
+uv run python -m src.plotting.scripts.reproducibility.real_scale_swap.aggregate_crossover \
   --assignment-a="${run_dirs[0]}" \
   --assignment-b="${run_dirs[1]}" \
   --output-dir="${aggregate_dir}"

@@ -12,7 +12,7 @@ set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
 mkdir -p logs
 
-uv run python scripts/reproducibility/synthetic_loss_space/install_paper_figures.py \
+uv run python -m src.plotting.scripts.reproducibility.synthetic_loss_space.install_paper_figures \
   --sgd-dir=outputs/23555_loss_space_toy \
   --adam-dir=outputs/23556_loss_space_toy \
   --figure-root=overleaf/figures/loss_space/synthetic_loss_space

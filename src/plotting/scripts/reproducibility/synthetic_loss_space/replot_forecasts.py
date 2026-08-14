@@ -3,7 +3,7 @@
 Lets us restyle the qualitative figure without retraining: `main.py` dumps
 `forecast_data_{label}.npz` per run, and this script reloads them and re-renders.
 
-    uv run python -m scripts.reproducibility.synthetic_loss_space.replot_forecasts [output_dir]
+    uv run python -m src.plotting.scripts.reproducibility.synthetic_loss_space.replot_forecasts [output_dir]
 
 Paper: regenerates the panels of Fig. loss_space_comp:synthetic:forecasts.
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.loss_space.plots import plot_forecast_evolution
+from src.plotting.core.loss_space import plot_forecast_evolution
 
 out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "outputs/loss_space_toy")
 paper_dir = out_dir.parent / f"{out_dir.name}_paper"

@@ -5,7 +5,9 @@ from hydra import compose, initialize
 from omegaconf import OmegaConf
 
 from main import build_run_specs
-from scripts.reproducibility.real_scale_swap.aggregate_crossover import (
+from src.loss_space.data import RealScaleSwapDataset
+from src.loss_space.train import Trainer
+from src.plotting.scripts.reproducibility.real_scale_swap.aggregate_crossover import (
     BASE_MODES,
     LR_ADJUSTED_MODE,
     build_summary,
@@ -17,18 +19,16 @@ from scripts.reproducibility.real_scale_swap.aggregate_crossover import (
     plot_paired_effect,
     validate_assignments,
 )
-from scripts.reproducibility.real_scale_swap.aggregate_permutation_campaign import (
+from src.plotting.scripts.reproducibility.real_scale_swap.aggregate_permutation_campaign import (
     holm_adjust,
     linear_auc,
     plot_by_dataset,
 )
-from scripts.reproducibility.real_scale_swap.permutation_schedule import (
+from src.scripts.permutation_schedule import (
     HIGH_GROUPS,
     assignment_pair,
     validate_schedule,
 )
-from src.loss_space.data import RealScaleSwapDataset
-from src.loss_space.train import Trainer
 
 
 def scale_swap_cfg(paths, scales):

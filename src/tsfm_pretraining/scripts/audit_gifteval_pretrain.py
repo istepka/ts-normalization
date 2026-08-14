@@ -3,7 +3,7 @@ corpus and fails loudly if it cannot be fingerprinted or the domain mapping
 is incomplete. See that module's docstring for what it produces.
 
 Usage:
-  uv run python scripts/audit_gifteval_pretrain.py \
+  uv run python -m src.tsfm_pretraining.scripts.audit_gifteval_pretrain \
       --corpus-root /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full \
       --output-dir outputs/gifteval_audit
 

@@ -1,0 +1,28 @@
+{
+  "name": "LTS Color Palette",
+  "identity": {
+    "primary": "#B52E17",
+    "secondary": "#398FD5",
+    "accent": "#E8CE69",
+    "background": "#F6F5F4",
+    "text": "#271E1C"
+  },
+  "categorical": {
+    "primaryRed": "#B52E17",
+    "secondaryBlue": "#398FD5",
+    "accentYellow": "#E8CE69",
+    "companionTeal": "#338C75",
+    "companionPink": "#BB4A8A",
+    "companionIndigo": "#5A65B0",
+    "companionCharcoal": "#4F5252"
+  },
+  "categoricalOrder": [
+    "#B52E17",
+    "#398FD5",
+    "#E8CE69",
+    "#338C75",
+    "#BB4A8A",
+    "#5A65B0",
+    "#4F5252"
+  ]
+}

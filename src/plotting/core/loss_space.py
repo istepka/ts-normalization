@@ -17,7 +17,12 @@ import torch
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.lines import Line2D
 
-GLOBAL_STYLE = {"color": "0.35", "linestyle": "--", "linewidth": 1.6}
+from src.plotting.core.figures import GLOBAL_STYLE, apply_paper_style
+from src.plotting.core.palette import PRIMARY, TEAL, apply_palette
+
+apply_palette()
+apply_paper_style()
+
 DISPLAY_LABELS = {
     "normalized": "Normalized-space",
     "original": "Original-space",
@@ -33,11 +38,17 @@ def _hide_top_right_spines(ax):
 
 def _save(fig, out_path: Path, paper: bool = False):
     """Paper: PDF only with tight margins. Otherwise PNG (preview) + PDF."""
+    metadata = {"CreationDate": None}
     if paper:
-        fig.savefig(out_path.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.02)
+        fig.savefig(
+            out_path.with_suffix(".pdf"),
+            bbox_inches="tight",
+            pad_inches=0.02,
+            metadata=metadata,
+        )
     else:
         fig.savefig(out_path, dpi=150)
-        fig.savefig(out_path.with_suffix(".pdf"))
+        fig.savefig(out_path.with_suffix(".pdf"), metadata=metadata)
     plt.close(fig)
 
 
@@ -339,7 +350,7 @@ def plot_forecast_evolution(history, names, title, columns, out_path, paper=Fals
             ax = axes[r][j]
             ax.plot(t_tail, ctx[r, -tail:], color="0.75", lw=1)
             ax.plot(t_tgt, tgt[r], color="black", lw=2)
-            ax.plot(t_tgt, pred_by_step[step][r], color="tab:red", lw=1.6)
+            ax.plot(t_tgt, pred_by_step[step][r], color=PRIMARY, lw=1.6)
             ax.axvline(ctx_len - 0.5, color="0.85", lw=0.8)
             ax.set_ylim(lo - pad, hi + pad)
             ax.set_xticks([])
@@ -379,8 +390,8 @@ def plot_qualitative(cfg, dataset, model, out_path, paper=False):
             t_ctx = np.arange(ctx_len)
             t_tgt = np.arange(ctx_len, ctx_len + len(tgt))
             ax.plot(t_ctx, ctx, color="black", label="context")
-            ax.plot(t_tgt, tgt, color="tab:green", label="target")
-            ax.plot(t_tgt, y_pred, color="tab:red", ls="--", label="prediction")
+            ax.plot(t_tgt, tgt, color=TEAL, label="target")
+            ax.plot(t_tgt, y_pred, color=PRIMARY, ls="--", label="prediction")
             ax.set_title(name)
             if c == 0:
                 ax.legend()
@@ -411,7 +422,7 @@ def gif_forecast_evolution(history, names, out_path, fps=2):
         (lp,) = ax.plot(
             t_tgt,
             pred_by_step[steps[0]][r],
-            color="tab:red",
+            color=PRIMARY,
             lw=1.8,
             label="prediction",
         )

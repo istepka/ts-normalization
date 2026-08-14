@@ -3,7 +3,7 @@ scale-free result tables from the recomputed metrics. See that module's
 docstring for what it produces.
 
 Usage:
-  uv run python -m scripts.report_scale_free_tables \
+  uv run python -m src.tsfm_pretraining.scripts.report_scale_free_tables \
       --metrics-dir outputs/tsfm_scale_free_metrics
 """
 

@@ -30,7 +30,8 @@ from src.loss_space.data import (
     RealVarianceBinnedDataset,
     SyntheticTSDataset,
 )
-from src.loss_space.plots import (
+from src.loss_space.train import Trainer
+from src.plotting.core.loss_space import (
     gif_forecast_evolution,
     gif_nmse_convergence,
     plot_forecast_evolution,
@@ -40,7 +41,6 @@ from src.loss_space.plots import (
     plot_nmse_subfigures,
     plot_qualitative,
 )
-from src.loss_space.train import Trainer
 
 SETUP_LABELS = ["normalized", "original", "original_equalvar", "original_gradmatch"]
 LR_ADJUSTED_LABEL = "original_lr_adjusted"

@@ -3,13 +3,13 @@ GiftEvalPretrain loss-space run outputs into comparison tables. See that
 module's docstring for what it produces.
 
 Usage:
-  uv run python -m scripts.aggregate_tsfm_loss_space \
+  uv run python -m src.tsfm_pretraining.scripts.aggregate_tsfm_loss_space \
       --run moment_normalized=outputs/tsfm_pretraining/moment_normalized \
       --run moment_original=outputs/tsfm_pretraining/moment_original \
       --output-dir outputs/tsfm_pretraining/aggregate
 
   # Paired controlled-scale effect (also requires --run entries for context):
-  uv run python -m scripts.aggregate_tsfm_loss_space \
+  uv run python -m src.tsfm_pretraining.scripts.aggregate_tsfm_loss_space \
       --run moment_original_A=outputs/.../moment_original_A \
       --run moment_original_B=outputs/.../moment_original_B \
       --scale-pair moment_original_A=moment_original_B \

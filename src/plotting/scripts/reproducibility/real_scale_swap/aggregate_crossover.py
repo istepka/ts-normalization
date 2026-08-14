@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
+from src.plotting.core import PRIMARY, SECONDARY, TEAL, mean_ci
+from src.plotting.core import save_figure as save_base_figure
+
 BASE_MODES = ["normalized", "original"]
 LR_ADJUSTED_MODE = "original_lr_adjusted"
 MODE_TITLES = {
@@ -33,7 +36,6 @@ HIGH_SCALE = 10.0
 ASSIGNMENT_A = np.array([LOW_SCALE] * 4 + [HIGH_SCALE] * 4)
 ASSIGNMENT_B = np.array([HIGH_SCALE] * 4 + [LOW_SCALE] * 4)
 EARLY_END_STEP = 2000
-T_CRITICAL_95_DF7 = 2.364624251
 
 
 def parse_args():
@@ -121,12 +123,6 @@ def full_linear_auc(values: np.ndarray, steps: np.ndarray) -> np.ndarray:
     return np.trapezoid(mean_curve, steps, axis=1) / duration
 
 
-def mean_ci(values: np.ndarray) -> tuple[np.ndarray, ...]:
-    mean = values.mean(axis=0)
-    half = T_CRITICAL_95_DF7 * values.std(axis=0, ddof=1) / np.sqrt(len(values))
-    return mean, mean - half, mean + half
-
-
 def scalar_ci(values: np.ndarray) -> dict[str, float]:
     mean, lower, upper = mean_ci(values)
     return {
@@ -146,10 +142,7 @@ def log_scalar_ci(values: np.ndarray) -> dict[str, float]:
 
 
 def save_figure(fig, path: Path, rect=None):
-    fig.tight_layout(rect=rect)
-    fig.savefig(path, dpi=150)
-    fig.savefig(path.with_suffix(".pdf"))
-    plt.close(fig)
+    save_base_figure(fig, path, dpi=150, tight_layout=True, rect=rect, bbox_inches=None)
 
 
 def plot_curves(
@@ -204,7 +197,7 @@ def plot_mode_by_dataset(
 ):
     fig, axes = plt.subplots(2, 4, figsize=(15, 7), sharex=True)
     steps = a["steps"]
-    scale_colors = {LOW_SCALE: "tab:blue", HIGH_SCALE: "tab:orange"}
+    scale_colors = {LOW_SCALE: SECONDARY, HIGH_SCALE: PRIMARY}
     assignments = (
         (a, ASSIGNMENT_A, "-"),
         (b, ASSIGNMENT_B, "--"),
@@ -291,8 +284,8 @@ def plot_paired_auc(a: dict, b: dict, output_path: Path):
         high_auc = full_linear_auc(high, a["steps"])
         for low_value, high_value in zip(low_auc, high_auc):
             ax.plot([0, 1], [low_value, high_value], color="0.65", linewidth=1.2)
-        ax.scatter(np.zeros(len(low_auc)), low_auc, color="tab:blue", zorder=2)
-        ax.scatter(np.ones(len(high_auc)), high_auc, color="tab:orange", zorder=2)
+        ax.scatter(np.zeros(len(low_auc)), low_auc, color=SECONDARY, zorder=2)
+        ax.scatter(np.ones(len(high_auc)), high_auc, color=PRIMARY, zorder=2)
         ax.set_xticks([0, 1], ["$b=1$", "$b=10$"])
         ax.set_title(title, fontsize=10)
         ax.set_ylim(bottom=0.0)
@@ -323,7 +316,7 @@ def plot_gradient_ratios(
         x,
         mean,
         yerr=error,
-        color=["tab:blue", "tab:orange", "tab:green"][: len(modes)],
+        color=[SECONDARY, PRIMARY, TEAL][: len(modes)],
         capsize=4,
     )
     ax.bar_label(bars, labels=[f"{value:.0f}x" for value in mean], padding=4)
