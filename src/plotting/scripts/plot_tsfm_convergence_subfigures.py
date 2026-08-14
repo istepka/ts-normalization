@@ -57,7 +57,7 @@ def main() -> None:
             axis.set_ylabel("Median per-dataset MASE", fontsize=7)
         else:
             axis.tick_params(labelleft=False)
-        style_step_axis(axis)
+        style_step_axis(axis, end_step=int(steps[-1]))
         fig.subplots_adjust(left=0.22, right=0.98, bottom=0.25, top=0.97)
         stem = f"paper_full_median_mase_{MODELS[model_name]['key']}"
         save_figure(fig, OUTPUT_DIR / stem, bbox_inches=None)

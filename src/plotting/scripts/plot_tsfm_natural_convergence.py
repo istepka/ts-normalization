@@ -44,7 +44,7 @@ def plot_full(metric: str, ylabel: str, stem: str) -> None:
             )
         axis.set_title(title, fontsize=8)
         axis.set_xlabel("Training step", fontsize=7)
-        style_step_axis(axis)
+        style_step_axis(axis, end_step=int(steps[-1]))
     axes[0].set_ylabel(ylabel, fontsize=7)
     handles, labels = axes[0].get_legend_handles_labels()
     bottom_legend(fig, handles, labels, ncol=2)
