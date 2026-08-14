@@ -45,7 +45,9 @@ if [ "${MODEL}" = "timesfm" ]; then
 else
   export PREDICTION_LENGTH=${PREDICTION_LENGTH:-128}
 fi
-INDEX_DIR="$(output_path data gifteval_window_index canonical)"
+# The window index is a shared cache, not a run artifact: every paired run must
+# read the same file, so it lives at a stable path rather than a dated one.
+INDEX_DIR=${INDEX_DIR:-outputs/gifteval_window_index}
 export INDEX=${INDEX:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
 export STEPS=${STEPS:-30000}
 export BATCH_SIZE=${BATCH_SIZE:-$default_batch_size}

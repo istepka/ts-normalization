@@ -18,22 +18,25 @@ set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
 mkdir -p logs
 
+# These runs predate the dated output layout and now live under legacy_runs.
+LEGACY_ROOT=outputs/2026-08-10/experiments/legacy_runs
 MOMENT_TAG=gifteval_moment_26371
 TIMESFM_TAG=gifteval_timesfm_fixed
+METRICS_DIR="${METRICS_DIR:-$(output_path analysis tsfm_pretraining tsfm_scale_free_metrics_v2)}"
 
 uv run python -m src.tsfm_pretraining.scripts.recompute_tsfm_scale_free_metrics \
-  --run "moment_normalized_natural=outputs/${MOMENT_TAG}_natural_moment_normalized" \
-  --run "moment_original_natural=outputs/${MOMENT_TAG}_natural_moment_original" \
-  --run "moment_normalized_A=outputs/${MOMENT_TAG}_scale_moment_normalized_A" \
-  --run "moment_normalized_B=outputs/${MOMENT_TAG}_scale_moment_normalized_B" \
-  --run "moment_original_A=outputs/${MOMENT_TAG}_scale_moment_original_A" \
-  --run "moment_original_B=outputs/${MOMENT_TAG}_scale_moment_original_B" \
-  --run "timesfm_normalized_natural=outputs/${TIMESFM_TAG}_natural_timesfm_normalized" \
-  --run "timesfm_original_natural=outputs/${TIMESFM_TAG}_natural_timesfm_native_original" \
-  --run "timesfm_normalized_A=outputs/${TIMESFM_TAG}_scale_timesfm_normalized_A" \
-  --run "timesfm_normalized_B=outputs/${TIMESFM_TAG}_scale_timesfm_normalized_B" \
-  --run "timesfm_original_A=outputs/${TIMESFM_TAG}_scale_timesfm_native_original_A" \
-  --run "timesfm_original_B=outputs/${TIMESFM_TAG}_scale_timesfm_native_original_B" \
-  --output-dir outputs/tsfm_scale_free_metrics_v2
+  --run "moment_normalized_natural=${LEGACY_ROOT}/${MOMENT_TAG}_natural_moment_normalized" \
+  --run "moment_original_natural=${LEGACY_ROOT}/${MOMENT_TAG}_natural_moment_original" \
+  --run "moment_normalized_A=${LEGACY_ROOT}/${MOMENT_TAG}_scale_moment_normalized_A" \
+  --run "moment_normalized_B=${LEGACY_ROOT}/${MOMENT_TAG}_scale_moment_normalized_B" \
+  --run "moment_original_A=${LEGACY_ROOT}/${MOMENT_TAG}_scale_moment_original_A" \
+  --run "moment_original_B=${LEGACY_ROOT}/${MOMENT_TAG}_scale_moment_original_B" \
+  --run "timesfm_normalized_natural=${LEGACY_ROOT}/${TIMESFM_TAG}_natural_timesfm_normalized" \
+  --run "timesfm_original_natural=${LEGACY_ROOT}/${TIMESFM_TAG}_natural_timesfm_native_original" \
+  --run "timesfm_normalized_A=${LEGACY_ROOT}/${TIMESFM_TAG}_scale_timesfm_normalized_A" \
+  --run "timesfm_normalized_B=${LEGACY_ROOT}/${TIMESFM_TAG}_scale_timesfm_normalized_B" \
+  --run "timesfm_original_A=${LEGACY_ROOT}/${TIMESFM_TAG}_scale_timesfm_native_original_A" \
+  --run "timesfm_original_B=${LEGACY_ROOT}/${TIMESFM_TAG}_scale_timesfm_native_original_B" \
+  --output-dir "${METRICS_DIR}"
 
-echo "wrote outputs/tsfm_scale_free_metrics_v2"
+echo "wrote ${METRICS_DIR}"

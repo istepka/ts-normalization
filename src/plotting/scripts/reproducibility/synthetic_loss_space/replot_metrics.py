@@ -27,7 +27,9 @@ from src.plotting.core.loss_space import (
 
 SETUP_LABELS = ["normalized", "original", "original_equalvar", "original_gradmatch"]
 
-out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "outputs/loss_space_toy")
+if len(sys.argv) < 2:
+    raise SystemExit("usage: replot_metrics <output_dir> [zoom1,zoom2,...]")
+out_dir = Path(sys.argv[1])
 zoom_windows = [
     int(w)
     for w in (sys.argv[2].split(",") if len(sys.argv) > 2 else ["200", "500", "2000"])

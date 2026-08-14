@@ -4,7 +4,7 @@ docstring for details.
 
 Usage:
   uv run python -m src.tsfm_pretraining.scripts.build_metric_explorer \
-      --metrics-dir outputs/tsfm_scale_free_metrics_v2 \
+      --metrics-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/scale_free_metrics \
       --template <template>.html --out <page>.html
 """
 

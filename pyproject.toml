@@ -25,6 +25,11 @@ dev = [
     "pytest>=9.1.1",
 ]
 
+[tool.pytest.ini_options]
+# Tests import `main` and `src.*` from the repo root, so put it on sys.path
+# rather than requiring PYTHONPATH=. on every invocation.
+pythonpath = ["."]
+
 [tool.ruff]
 # Vendored third-party source (src/tsfm_pretraining/vendor/) is pinned to a
 # specific upstream commit and must stay byte-for-byte reproducible against

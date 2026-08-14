@@ -42,14 +42,8 @@ PAIR_ONE_NORMALIZED_PATHS = (
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--campaign-root", type=Path, default=Path("outputs/scale_swap_permutations")
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("outputs/scale_swap_permutation_analysis"),
-    )
+    parser.add_argument("--campaign-root", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--normalized-campaign-root",
         type=Path,

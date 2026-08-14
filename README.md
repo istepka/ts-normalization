@@ -110,7 +110,7 @@ Pre-builds and caches the canonical GiftEvalPretrain window index as a parquet f
 ```sh
 uv run python -m src.tsfm_pretraining.scripts.audit_gifteval_pretrain \
     --corpus-root /path/to/giftevalpretrain_full \
-    --output-dir outputs/gifteval_audit
+    --output-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/gifteval_audit
 ```
 
 Audits the local GiftEvalPretrain corpus and fails loudly if it can't be fingerprinted or the domain mapping is incomplete. Produces a per-dataset inventory, frequency and missing-value breakdowns, a variance histogram, and the sampling table used to configure `train.py`'s dataset weights.
@@ -119,9 +119,9 @@ Audits the local GiftEvalPretrain corpus and fails loudly if it can't be fingerp
 
 ```sh
 uv run python -m src.tsfm_pretraining.scripts.aggregate_tsfm_loss_space \
-    --run moment_normalized=outputs/.../moment_normalized \
-    --run moment_original=outputs/.../moment_original \
-    --output-dir outputs/.../aggregate
+    --run moment_normalized=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_normalized \
+    --run moment_original=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_original \
+    --output-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/.../aggregate
 ```
 
 Reads a set of run output directories and writes `comparison.csv`/`.json`: one row per run with final pooled MSE, log-MSE AUC, and per-dataset/domain/frequency Gini. With `--scale-pair`, also writes the paired per-dataset AUC(A) - AUC(B) effect and its 95% confidence interval.
@@ -130,9 +130,9 @@ Reads a set of run output directories and writes `comparison.csv`/`.json`: one r
 
 ```sh
 uv run python -m src.tsfm_pretraining.scripts.recompute_tsfm_scale_free_metrics \
-    --run moment_original_A=outputs/gifteval_moment_..._A \
-    --run moment_original_B=outputs/gifteval_moment_..._B \
-    --output-dir outputs/scale_free_metrics
+    --run moment_original_A=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_original_A \
+    --run moment_original_B=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_original_B \
+    --output-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/scale_free_metrics
 ```
 
 Rereads saved checkpoints and rescores every run on identical, scale-free nMSE/MASE definitions, since the original training-time eval used each variant's own loss space and so wasn't comparable across normalized vs. original runs. Writes `scale_free_metrics.csv` (per-checkpoint) and `final_per_dataset.json` (final-step per-dataset breakdown).
@@ -141,7 +141,7 @@ Rereads saved checkpoints and rescores every run on identical, scale-free nMSE/M
 
 ```sh
 uv run python -m src.tsfm_pretraining.scripts.report_scale_free_tables \
-    --metrics-dir outputs/tsfm_scale_free_metrics
+    --metrics-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/scale_free_metrics
 ```
 
 Consumes the output of `recompute_tsfm_scale_free_metrics.py` and builds the final result tables: a final-step summary, paired scale-A-vs-B effects, and normalized-vs-original head-to-head comparisons. Writes `summary.csv`, `paired_effects.json`, and `head_to_head.json` into the same metrics directory.
@@ -150,7 +150,7 @@ Consumes the output of `recompute_tsfm_scale_free_metrics.py` and builds the fin
 
 ```sh
 uv run python -m src.tsfm_pretraining.scripts.build_metric_explorer \
-    --metrics-dir outputs/tsfm_scale_free_metrics_v2 \
+    --metrics-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/scale_free_metrics \
     --template src/tsfm_pretraining/metric_explorer_template.html \
     --out explorer.html
 ```
@@ -212,6 +212,16 @@ belong under `analysis`. Figures and replots belong under `visualizations` and
 keep the source experiment or run name in their path. The shared launchers use
 `scripts/output_paths.sh` and pass Hydra's run directory explicitly so Hydra
 metadata stays beside the artifacts it describes.
+
+Two paths deliberately sit outside the dated layout. The GiftEvalPretrain
+window index is a shared cache every paired run must read from, so it stays at
+`outputs/gifteval_window_index/` (override with `INDEX_DIR` or `INDEX`). A
+permutation campaign spans many submissions, so its launchers take
+`CAMPAIGN_ROOT` (and the aggregate launcher `NORMALIZED_CAMPAIGN_ROOT` and
+`ANALYSIS_DIR`); set `OUTPUT_DATE` or `CAMPAIGN_ROOT` so every pair of one
+campaign lands under the same root. Launchers that read completed past runs
+name them at their post-migration `outputs/YYYY-MM-DD/experiments/legacy_runs/`
+paths.
 
 The migration tool is dry-run by default
 

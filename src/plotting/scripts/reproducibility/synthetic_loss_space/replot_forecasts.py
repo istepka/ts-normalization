@@ -15,7 +15,9 @@ import numpy as np
 
 from src.plotting.core.loss_space import plot_forecast_evolution
 
-out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "outputs/loss_space_toy")
+if len(sys.argv) < 2:
+    raise SystemExit("usage: replot_forecasts <output_dir>")
+out_dir = Path(sys.argv[1])
 paper_dir = out_dir.parent / f"{out_dir.name}_paper"
 paper_dir.mkdir(parents=True, exist_ok=True)
 columns = [0, 10, 50, 100, 500, 30000]

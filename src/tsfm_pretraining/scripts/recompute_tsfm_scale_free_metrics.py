@@ -4,9 +4,9 @@ why this recompute is needed.
 
 Usage:
   uv run python -m src.tsfm_pretraining.scripts.recompute_tsfm_scale_free_metrics \
-      --run moment_original_A=outputs/gifteval_moment_..._A \
-      --run moment_original_B=outputs/gifteval_moment_..._B \
-      --output-dir outputs/scale_free_metrics
+      --run moment_original_A=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_original_A \
+      --run moment_original_B=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_original_B \
+      --output-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/scale_free_metrics
 """
 
 import argparse

@@ -13,6 +13,6 @@ cd /zfsauton2/home/istepka/ts-normalization
 mkdir -p logs
 
 uv run python -m src.plotting.scripts.reproducibility.synthetic_loss_space.install_paper_figures \
-  --sgd-dir=outputs/23555_loss_space_toy \
-  --adam-dir=outputs/23556_loss_space_toy \
+  --sgd-dir=outputs/2026-07-29/experiments/legacy_runs/23555_loss_space_toy \
+  --adam-dir=outputs/2026-07-29/experiments/legacy_runs/23556_loss_space_toy \
   --figure-root=overleaf/figures/loss_space/synthetic_loss_space

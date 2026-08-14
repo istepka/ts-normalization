@@ -119,3 +119,43 @@ installed files predated the runs the launchers now name as canonical.
 
 If the surrounding text quotes numbers from the older runs, revert those six
 files rather than editing the text.
+
+## Launcher path audit
+
+Every launcher still named the pre-migration flat `outputs/<name>` paths, so
+anything reading a completed run would have failed. Swept the whole repo for
+`outputs/` literals and checked each one against the filesystem.
+
+- Launchers that read completed runs now name them under
+  `outputs/YYYY-MM-DD/experiments/legacy_runs/`, resolved through
+  `outputs/organization_manifest.json`. This covers the synthetic figure
+  install, the variance-bin recovery, the LR-adjusted crossover, and the adhoc
+  scale-free recompute.
+- Launchers that write new outputs now go through `output_path`, including
+  `recover_missing_datasets.sbatch` and `train_lr_adjusted_crossover.sbatch`,
+  which still wrote flat `outputs/${SLURM_JOB_ID}_*` directories. Both also
+  gained the `hydra.run.dir` override their siblings already had, so Hydra
+  metadata lands beside the run.
+- The permutation campaign spans 14 submissions, so a per-day default would
+  scatter one campaign across roots. Its launchers take `CAMPAIGN_ROOT`,
+  `NORMALIZED_CAMPAIGN_ROOT`, and `ANALYSIS_DIR` env overrides, defaulting to
+  the completed campaign for the aggregate and to a dated root for training.
+- `aggregate_permutation_campaign.py` had a stale `--campaign-root` default
+  and `replot_metrics`/`replot_forecasts` had a stale `outputs/loss_space_toy`
+  default. All are required arguments now, so a missing path fails loudly
+  instead of silently reading or writing the wrong place.
+
+## The window index was about to be rebuilt daily
+
+`submit_pretraining.sh`, `run_pretraining.sbatch`, and
+`build_gifteval_window_index.sbatch` derived the index path from
+`output_path data gifteval_window_index canonical`, which is date-stamped. The
+built index lives at the stable `outputs/gifteval_window_index/`, so today's
+submission would have found no index, spent a CPU job rebuilding one, and
+written it under today's date. Runs submitted on different days would then have
+trained on different index files, quietly breaking the identical-windows
+guarantee that makes the paired conditions comparable. The three launchers now
+default `INDEX_DIR` to the stable path.
+
+`pyproject.toml` gained `[tool.pytest.ini_options] pythonpath = ["."]` so the
+suite runs as plain `uv run pytest` instead of needing `PYTHONPATH=.`.

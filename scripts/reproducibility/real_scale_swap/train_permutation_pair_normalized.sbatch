@@ -11,7 +11,14 @@
 
 set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
-mkdir -p logs outputs/scale_swap_permutations_normalized
+mkdir -p logs
+source scripts/output_paths.sh
+
+# One campaign spans 14 submissions, so every pair must land under the same
+# root. Set CAMPAIGN_ROOT (or OUTPUT_DATE) to keep them together across days;
+# the default only works if the whole campaign is submitted on one day.
+CAMPAIGN_ROOT="${CAMPAIGN_ROOT:-$(output_path experiments real_scale_swap scale_swap_permutations_normalized)}"
+mkdir -p "${CAMPAIGN_ROOT}"
 
 pair_index="$1"
 if ((pair_index < 2 || pair_index > 15)); then
@@ -23,7 +30,7 @@ printf -v pair_tag '%02d' "${pair_index}"
 for variant in a b; do
   assignment="$(uv run python -m src.scripts.permutation_schedule \
     --pair-index="${pair_index}" --arm="${variant}")"
-  run_dir="outputs/scale_swap_permutations_normalized/pair_${pair_tag}_${variant}"
+  run_dir="${CAMPAIGN_ROOT}/pair_${pair_tag}_${variant}"
   if [[ -e "${run_dir}" ]]; then
     echo "refusing to overwrite existing output: ${run_dir}" >&2
     exit 2
@@ -33,6 +40,7 @@ for variant in a b; do
     device=cuda \
     setups='[normalized]' \
     "output_dir=${run_dir}" \
+    "hydra.run.dir=${run_dir}" \
     "wandb.experiment=scale_perm_norm_p${pair_tag}_${variant}" \
     "data.scale_assignment=${assignment}"
 done

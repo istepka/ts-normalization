@@ -5,7 +5,7 @@ is incomplete. See that module's docstring for what it produces.
 Usage:
   uv run python -m src.tsfm_pretraining.scripts.audit_gifteval_pretrain \
       --corpus-root /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full \
-      --output-dir outputs/gifteval_audit
+      --output-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/gifteval_audit
 
 For a fast development pass (not the real Phase 1 deliverable), cap series
 scanned per dataset with --max-series-per-dataset.

@@ -4,7 +4,7 @@ docstring for what it produces.
 
 Usage:
   uv run python -m src.tsfm_pretraining.scripts.report_scale_free_tables \
-      --metrics-dir outputs/tsfm_scale_free_metrics
+      --metrics-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/scale_free_metrics
 """
 
 import argparse
