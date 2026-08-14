@@ -38,6 +38,7 @@ class TsfmTrainConfig:
     eval_batches: int = MISSING
     eval_windows_per_dataset: int = MISSING
     checkpoint_every: int = MISSING
+    resume_from: str | None = MISSING
 
 
 @dataclass

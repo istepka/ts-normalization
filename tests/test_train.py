@@ -2,6 +2,7 @@
 the synthetic tiny_corpus fixture (wandb disabled). The real corpus path is
 exercised separately by the Phase 2/5 smoke tests (see notes/agentic_logs)."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,7 @@ def _base_cfg(tiny_corpus, tmp_path, model: str) -> OmegaConf:
                 "eval_batches": 1,
                 "eval_windows_per_dataset": 2,
                 "checkpoint_every": 4,
+                "resume_from": None,
             },
             "wandb": {
                 "entity": "x",
@@ -128,6 +130,38 @@ def test_run_moment_end_to_end(tiny_corpus, tmp_path):
     assert set(summary["windows_processed"]["dataset"]) <= {"synth_a", "synth_b"}
     assert (Path(cfg.output_dir) / "checkpoint_step4.pt").is_file()
     assert (Path(cfg.output_dir) / "summary.json").is_file()
+
+
+def test_run_moment_resumes_after_checkpoint_and_preserves_history(
+    tiny_corpus, tmp_path
+):
+    cfg = _base_cfg(tiny_corpus, tmp_path, "moment")
+    cfg.train.steps = 2
+    cfg.train.checkpoint_every = 2
+    source_dir = tmp_path / "source"
+    cfg.output_dir = str(source_dir)
+    index = train_mod.resolve_window_index(cfg, tiny_corpus[1])
+
+    run = wandb.init(mode="disabled")
+    train_mod.run_moment(cfg, index, run)
+    run.finish()
+
+    cfg.train.steps = 4
+    cfg.train.checkpoint_every = 4
+    cfg.train.resume_from = str(source_dir / "checkpoint_step2.pt")
+    cfg.output_dir = str(tmp_path / "continued")
+    run = wandb.init(mode="disabled")
+    summary = train_mod.run_moment(cfg, index, run)
+    run.finish()
+
+    history = json.loads((Path(cfg.output_dir) / "history.json").read_text())
+    assert history["step"] == [2, 4]
+    assert summary["optimization"] == {
+        "steps_attempted": 4,
+        "steps_skipped": 0,
+        "updates_applied": 4,
+    }
+    assert (Path(cfg.output_dir) / "checkpoint_step4.pt").is_file()
 
 
 def test_run_timesfm_end_to_end(tiny_corpus, tmp_path):

@@ -241,6 +241,52 @@ def sample_stratified_eval_rows(
     return pd.concat(parts)
 
 
+def initialize_training_state(
+    cfg: DictConfig,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+) -> tuple[int, dict, dict, dict, Path]:
+    """Initialize a new run or continue one from a complete checkpoint."""
+    out_dir = Path(cfg.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if cfg.train.resume_from is None:
+        return (
+            0,
+            windows_processed_counter(),
+            {"steps_attempted": 0, "steps_skipped": 0},
+            {"step": [], "pooled_mse": [], "reports": []},
+            out_dir,
+        )
+
+    checkpoint_path = Path(cfg.train.resume_from)
+    source_dir = checkpoint_path.parent
+    if out_dir.resolve() == source_dir.resolve():
+        raise ValueError("resume output_dir must differ from the source run directory")
+    start_step = load_checkpoint(checkpoint_path, model, optimizer)
+    if start_step >= cfg.train.steps:
+        raise ValueError(
+            f"checkpoint step {start_step} must be below train.steps {cfg.train.steps}"
+        )
+
+    history = json.loads((source_dir / "history.json").read_text())
+    summary = json.loads((source_dir / "summary.json").read_text())
+    if history["step"][-1] != start_step:
+        raise ValueError("source history must end at the checkpoint step")
+    optimization = {
+        "steps_attempted": summary["optimization"]["steps_attempted"],
+        "steps_skipped": summary["optimization"]["steps_skipped"],
+    }
+    if optimization["steps_attempted"] != start_step:
+        raise ValueError("source optimization count must equal the checkpoint step")
+    return (
+        start_step,
+        summary["windows_processed"],
+        optimization,
+        history,
+        out_dir,
+    )
+
+
 def run_moment(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
     if cfg.condition not in ma.CONDITIONS:
         raise ValueError(f"condition must be one of {ma.CONDITIONS}")
@@ -280,13 +326,11 @@ def run_moment(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
     )
     strat_eval_batch = ma.make_batch(index, strat_eval_rows, cache)
 
-    counter = windows_processed_counter()
-    optimization = {"steps_attempted": 0, "steps_skipped": 0}
-    history = {"step": [], "pooled_mse": [], "reports": []}
-    out_dir = Path(cfg.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    start_step, counter, optimization, history, out_dir = initialize_training_state(
+        cfg, model, optimizer
+    )
 
-    for step in range(1, cfg.train.steps + 1):
+    for step in range(start_step + 1, cfg.train.steps + 1):
         rows = train_table.iloc[schedule[step - 1]]
         batch = ma.make_batch(
             index,
@@ -412,13 +456,11 @@ def run_timesfm(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
         index, strat_eval_rows, cache, model_config.horizon_len
     )
 
-    counter = windows_processed_counter()
-    optimization = {"steps_attempted": 0, "steps_skipped": 0}
-    history = {"step": [], "pooled_mse": [], "reports": []}
-    out_dir = Path(cfg.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    start_step, counter, optimization, history, out_dir = initialize_training_state(
+        cfg, model, optimizer
+    )
 
-    for step in range(1, cfg.train.steps + 1):
+    for step in range(start_step + 1, cfg.train.steps + 1):
         rows = train_table.iloc[schedule[step - 1]]
         batch = tm.make_batch(
             index,
@@ -552,13 +594,11 @@ def run_chronos2(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
     )
     strat_eval_batch = ca.make_batch(index, strat_eval_rows, cache)
 
-    counter = windows_processed_counter()
-    optimization = {"steps_attempted": 0, "steps_skipped": 0}
-    history = {"step": [], "pooled_mse": [], "reports": []}
-    out_dir = Path(cfg.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    start_step, counter, optimization, history, out_dir = initialize_training_state(
+        cfg, model, optimizer
+    )
 
-    for step in range(1, cfg.train.steps + 1):
+    for step in range(start_step + 1, cfg.train.steps + 1):
         rows = train_table.iloc[schedule[step - 1]]
         batch = ca.make_batch(
             index,
@@ -681,13 +721,11 @@ def run_moirai2(cfg: DictConfig, index: wi.WindowIndex, wandb_run) -> dict:
     )
     strat_eval_batch = m2.make_batch(index, strat_eval_rows, cache, model_config)
 
-    counter = windows_processed_counter()
-    optimization = {"steps_attempted": 0, "steps_skipped": 0}
-    history = {"step": [], "pooled_mse": [], "reports": []}
-    out_dir = Path(cfg.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    start_step, counter, optimization, history, out_dir = initialize_training_state(
+        cfg, model, optimizer
+    )
 
-    for step in range(1, cfg.train.steps + 1):
+    for step in range(start_step + 1, cfg.train.steps + 1):
         rows = train_table.iloc[schedule[step - 1]]
         batch = m2.make_batch(
             index,

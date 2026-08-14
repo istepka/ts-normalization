@@ -33,6 +33,7 @@ train:
   eval_batches: 50
   eval_windows_per_dataset: 64
   checkpoint_every: 6000
+  resume_from: null
 
 wandb:
   entity: ts-normalization
