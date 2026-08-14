@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
-from src.tsfm_pretraining import moment_adapter as ma
-from src.tsfm_pretraining import window_index as wi
+from src.data.gifteval import window_index as wi
+from src.models import moment as ma
 
 
 def _tiny_model_config(context_length=32, patch_len=8):
@@ -196,7 +196,7 @@ def test_checkpoint_roundtrip(tiny_corpus, tmp_path):
         model, batch, "moment_original", optimizer, grad_clip_norm=1.0
     )
 
-    from src.tsfm_pretraining import train as train_mod
+    from src.training import tsfm as train_mod
 
     path = tmp_path / "ckpt.pt"
     train_mod.save_checkpoint(path, model, optimizer, step=1)

@@ -9,7 +9,7 @@ import pytest
 from omegaconf import OmegaConf
 
 import wandb
-from src.tsfm_pretraining import train as train_mod
+from src.training import tsfm as train_mod
 
 
 def _base_cfg(tiny_corpus, tmp_path, model: str) -> OmegaConf:

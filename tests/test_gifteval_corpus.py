@@ -2,7 +2,7 @@ import datasets
 import numpy as np
 import pandas as pd
 
-from src.tsfm_pretraining import gifteval_corpus as gc
+from src.data.gifteval import corpus as gc
 
 
 def test_domain_map_covers_real_corpus_exactly():

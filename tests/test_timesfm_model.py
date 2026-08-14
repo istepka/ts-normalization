@@ -1,9 +1,9 @@
 import numpy as np
 import torch
 
-from src.tsfm_pretraining import timesfm_model as tm
-from src.tsfm_pretraining import window_index as wi
-from src.tsfm_pretraining.vendor.timesfm_v1.pytorch_patched_decoder import TimesFMConfig
+from src.data.gifteval import window_index as wi
+from src.models import timesfm as tm
+from src.models.vendor.timesfm_v1.pytorch_patched_decoder import TimesFMConfig
 
 
 def _tiny_config(patch_len=32, horizon_len=32):
@@ -378,9 +378,7 @@ def test_normalized_loss_is_scale_invariant_for_both_statistic_modes():
                 frequency=np.array(["H"] * 4),
                 scale=torch.full((4,), scale),
             )
-            result = tm.forward(
-                model, batch, "timesfm_normalized", normalization_mode
-            )
+            result = tm.forward(model, batch, "timesfm_normalized", normalization_mode)
             losses.append(result.mse_per_example)
 
         assert torch.allclose(losses[0], losses[1], rtol=1e-5, atol=1e-6)

@@ -69,7 +69,7 @@ if [[ $MODEL == timesfm ]]; then
   )
 fi
 
-uv run python -m src.tsfm_pretraining.train --config-name="$CONFIG" \
+uv run python -m src.training.tsfm --config-name="$CONFIG" \
   device=cuda \
   condition="$CONDITION" \
   experiment_kind=natural_mixture \

@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
-from src.tsfm_pretraining import chronos2_adapter as ca
-from src.tsfm_pretraining import window_index as wi
+from src.data.gifteval import window_index as wi
+from src.models import chronos2 as ca
 
 
 def _tiny_config() -> ca.Chronos2Config:

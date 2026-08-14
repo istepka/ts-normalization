@@ -28,7 +28,7 @@ CONDITION=${CONDITIONS[$condition_index]}
 JOBTAG=timesfm_whole_context_natural_${SLURM_ARRAY_JOB_ID}
 run_dir="outputs/${JOBTAG}_seed${SEED}_${CONDITION}"
 
-uv run python -m src.tsfm_pretraining.train --config-name=tsfm_timesfm \
+uv run python -m src.training.tsfm --config-name=tsfm_timesfm \
   device=cuda \
   condition="${CONDITION}" \
   experiment_kind=natural_mixture \

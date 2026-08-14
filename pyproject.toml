@@ -31,8 +31,8 @@ dev = [
 pythonpath = ["."]
 
 [tool.ruff]
-# Vendored third-party source (src/tsfm_pretraining/vendor/) is pinned to a
+# Vendored third-party source (src/models/vendor/) is pinned to a
 # specific upstream commit and must stay byte-for-byte reproducible against
 # that commit (see each vendor subdir's REVISION file); exclude it from
 # formatting/linting so tooling never mechanically drifts it from upstream.
-extend-exclude = ["src/tsfm_pretraining/vendor"]
+extend-exclude = ["src/models/vendor"]

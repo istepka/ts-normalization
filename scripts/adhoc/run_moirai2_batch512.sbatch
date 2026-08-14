@@ -39,7 +39,7 @@ fi
 job_tag=gifteval_moirai2_b512_${SLURM_ARRAY_JOB_ID}
 run_dir="outputs/${job_tag}_seed${seed}_${condition}_${assignment}"
 
-PYTHONPATH=. uv run python -m src.tsfm_pretraining.train \
+PYTHONPATH=. uv run python -m src.training.tsfm \
   --config-name=tsfm_moirai2 \
   device=cuda \
   condition="$condition" \

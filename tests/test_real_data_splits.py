@@ -1,7 +1,7 @@
 import numpy as np
 from omegaconf import OmegaConf
 
-from src.loss_space.data import load_real_window_splits
+from src.data.loss_space import load_real_window_splits
 
 
 def real_data_cfg(path, val_fraction: float = 0.2):

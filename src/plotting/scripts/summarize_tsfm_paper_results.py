@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.data.gifteval.window_index import stable_seed
 from src.plotting.core import MODELS, capped_gini, final_dataset_mase, mean_ci
-from src.tsfm_pretraining.window_index import stable_seed
 
 OUTPUT_DIR = Path("outputs/2026-08-13/analysis/tsfm_pretraining/four_model_loss_space")
 TIMESFM_CONTROLLED_ROOT = Path("outputs/2026-08-10/experiments/legacy_runs")

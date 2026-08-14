@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from src.tsfm_pretraining import window_index as wi
+from src.data.gifteval import window_index as wi
 
 
 def _build_index(tiny_corpus, **overrides):

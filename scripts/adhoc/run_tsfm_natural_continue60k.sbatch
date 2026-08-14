@@ -75,7 +75,7 @@ job_tag=tsfm_natural_continue60k_${SLURM_ARRAY_JOB_ID}
 run_root=$(output_path experiments "tsfm_pretraining/${model}" "$job_tag")
 run_dir="${run_root}/seed${seed}_${condition}_natural"
 
-PYTHONPATH=. uv run python -m src.tsfm_pretraining.train \
+PYTHONPATH=. uv run python -m src.training.tsfm \
   --config-name="$config_name" \
   device=cuda \
   condition="$condition" \

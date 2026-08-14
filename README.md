@@ -3,7 +3,7 @@
 ## Configs
 
 The project uses Hydra configs in `conf/`. YAML remains the record of each
-experiment, while `src/configs.py` supplies structured schemas that reject
+experiment, while `src/config/` supplies structured schemas that reject
 unknown keys, wrong types, and missing required values at runtime.
 
 There are two config families.
@@ -22,7 +22,7 @@ Run a config by selecting its name and adding Hydra overrides as needed.
 ```sh
 uv run python main.py --config-name=scale_swap
 
-uv run python -m src.tsfm_pretraining.train \
+uv run python -m src.training.tsfm \
     --config-name=tsfm_timesfm \
     device=cuda \
     timesfm.config_size=70m \
@@ -40,22 +40,66 @@ Slurm launchers and shell wrappers, so nothing in it needs importing.
 
 ```text
 src/
-  configs.py                 structured Hydra schemas
-  loss_space/                synthetic loss-space toy
-  tsfm_pretraining/          TSFM pretraining, eval, and aggregation
-    scripts/                 CLIs for the modules above
+  config/                    structured Hydra schemas
+  data/
+    gifteval/                corpus inventory, audit, window index
+    loss_space.py            the four loss-space dataset variants
+    windows.py               window construction and train/val splits
+    seasonality.py           frequency aliases and seasonal periods
+  losses/                    pointwise, quantile, loss-space objectives
+  metrics/                   forecast error, inequality, convergence, reports
+  models/
+    moment.py timesfm.py chronos2.py moirai2.py   TSFM adapters
+    patch_transformer.py     the loss-space toy model
+    vendor/                  pinned upstream source, excluded from lint
+  training/                  the training loops and gradient bookkeeping
   plotting/
     core/                    palette, figure helpers, run registries
     scripts/                 figure and table entry points
-  scripts/                   repo-level tooling invoked by launchers
+  scripts/                   CLIs and repo-level tooling
 scripts/                     sbatch files and submit wrappers
 ```
+
+The layout is organized by concern rather than by experiment, so the synthetic
+toy and the TSFM runs share one definition of each metric, loss, and dataset.
+A Gini from the toy and a Gini from a TSFM run are the same computation.
 
 Everything under `src/` runs as a module, for example
 
 ```sh
 uv run python -m src.plotting.scripts.plot_tsfm_natural_convergence
 ```
+
+### `src/data/`, `src/losses/`, `src/metrics/`
+
+`data/gifteval/` covers the pretraining corpus: `corpus.py` inventories and
+fingerprints it, `audit.py` checks it, and `window_index.py` builds the shared
+window cache. `data/loss_space.py` holds the four loss-space dataset variants
+(synthetic, shape-scaled, variance-binned, scale-swap) over the pure array
+helpers in `data/windows.py`.
+
+`losses/` separates the objectives by convention rather than by model.
+`pointwise.py` has the masked MSE and MAE every adapter scores with.
+`quantile.py` keeps two forms rather than one, since `crps_quantile_loss` is
+twice `pinball_loss` and sums over quantile levels rather than averaging them.
+Merging the two would rescale the gradients of whichever model lost its form.
+
+`metrics/` is the single source for anything reported: `forecast.py` for
+per-window error, `inequality.py` for Gini and the per-source breakdowns,
+`convergence.py` for log-MSE AUC and steps-to-threshold, and `scale_free.py`,
+`aggregate.py`, and `report.py` for the tables built on top of them.
+
+### `src/models/` and `src/training/`
+
+`models/` has one adapter per TSFM (`moment.py`, `timesfm.py`, `chronos2.py`,
+`moirai2.py`), each exposing the same `build_*_model` / `make_batch` /
+`forward` / `training_step_metrics` surface, plus `patch_transformer.py` for
+the loss-space toy. `vendor/` is pinned upstream source, kept byte-identical
+to the commit in each subdirectory's `REVISION` file and excluded from ruff.
+
+`training/` has the loops: `tsfm.py` (the Hydra entry point for all four
+TSFMs) and `loss_space.py` (the toy `Trainer`), over the shared gradient-norm
+and safe-clipping bookkeeping in `gradients.py`.
 
 ### `src/plotting/`
 
@@ -91,15 +135,15 @@ with per-experiment figure builders under
 `src/plotting/scripts/reproducibility/`, organized by experiment line
 (`real_scale_swap/`, `real_variance_bins/`, `synthetic_loss_space/`).
 
-### `src/tsfm_pretraining/scripts/`
+### `src/scripts/`
 
-Thin CLIs over the `src.tsfm_pretraining` modules. Each one's docstring points
-at the module that does the work.
+Thin CLIs over the packages above, plus repo-level tooling. Each one's
+docstring points at the module that does the work.
 
 #### `build_gifteval_window_index.py`
 
 ```sh
-uv run python -m src.tsfm_pretraining.scripts.build_gifteval_window_index \
+uv run python -m src.scripts.build_gifteval_window_index \
     --corpus-root /path/to/giftevalpretrain_full \
     --output outputs/gifteval_window_index/context512_pred128.parquet \
     --context-length 512 --prediction-length 128 --stride 512
@@ -110,17 +154,17 @@ Pre-builds and caches the canonical GiftEvalPretrain window index as a parquet f
 #### `audit_gifteval_pretrain.py`
 
 ```sh
-uv run python -m src.tsfm_pretraining.scripts.audit_gifteval_pretrain \
+uv run python -m src.scripts.audit_gifteval_pretrain \
     --corpus-root /path/to/giftevalpretrain_full \
     --output-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/gifteval_audit
 ```
 
-Audits the local GiftEvalPretrain corpus and fails loudly if it can't be fingerprinted or the domain mapping is incomplete. Produces a per-dataset inventory, frequency and missing-value breakdowns, a variance histogram, and the sampling table used to configure `train.py`'s dataset weights.
+Audits the local GiftEvalPretrain corpus and fails loudly if it can't be fingerprinted or the domain mapping is incomplete. Produces a per-dataset inventory, frequency and missing-value breakdowns, a variance histogram, and the sampling table used to configure `src/training/tsfm.py`'s dataset weights.
 
 #### `aggregate_tsfm_loss_space.py`
 
 ```sh
-uv run python -m src.tsfm_pretraining.scripts.aggregate_tsfm_loss_space \
+uv run python -m src.scripts.aggregate_tsfm_loss_space \
     --run moment_normalized=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_normalized \
     --run moment_original=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_original \
     --output-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/.../aggregate
@@ -131,7 +175,7 @@ Reads a set of run output directories and writes `comparison.csv`/`.json`: one r
 #### `recompute_tsfm_scale_free_metrics.py`
 
 ```sh
-uv run python -m src.tsfm_pretraining.scripts.recompute_tsfm_scale_free_metrics \
+uv run python -m src.scripts.recompute_tsfm_scale_free_metrics \
     --run moment_original_A=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_original_A \
     --run moment_original_B=outputs/YYYY-MM-DD/experiments/tsfm_pretraining/.../moment_original_B \
     --output-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/scale_free_metrics
@@ -142,7 +186,7 @@ Rereads saved checkpoints and rescores every run on identical, scale-free nMSE/M
 #### `report_scale_free_tables.py`
 
 ```sh
-uv run python -m src.tsfm_pretraining.scripts.report_scale_free_tables \
+uv run python -m src.scripts.report_scale_free_tables \
     --metrics-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/scale_free_metrics
 ```
 
@@ -151,15 +195,15 @@ Consumes the output of `recompute_tsfm_scale_free_metrics.py` and builds the fin
 #### `build_metric_explorer.py`
 
 ```sh
-uv run python -m src.tsfm_pretraining.scripts.build_metric_explorer \
+uv run python -m src.scripts.build_metric_explorer \
     --metrics-dir outputs/YYYY-MM-DD/analysis/tsfm_pretraining/scale_free_metrics \
-    --template src/tsfm_pretraining/metric_explorer_template.html \
+    --template src/metrics/metric_explorer_template.html \
     --out explorer.html
 ```
 
 Inlines a recomputed metrics directory's data into the explorer template, producing a single self-contained HTML page (no external requests, so it also works published as an Artifact). Lets you interactively browse per-checkpoint and per-dataset metrics across every run variant.
 
-### `src/scripts/`
+#### `organize_outputs.py` and `permutation_schedule.py`
 
 Repo-level tooling that the launchers call. `organize_outputs.py` migrates
 outputs into the dated layout described below. `permutation_schedule.py`

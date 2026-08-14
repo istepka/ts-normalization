@@ -43,13 +43,13 @@ esac
 RUN_ROOT="$(output_path experiments "tsfm_pretraining/${MODEL}" "${JOBTAG}")"
 ANALYSIS_DIR="$(output_path analysis "tsfm_pretraining/${MODEL}" "${JOBTAG}")"
 
-uv run python -m src.tsfm_pretraining.scripts.aggregate_tsfm_loss_space \
+uv run python -m src.scripts.aggregate_tsfm_loss_space \
   --run "${COND_A}=${RUN_ROOT}/natural_${COND_A}" \
   --run "${COND_B}=${RUN_ROOT}/natural_${COND_B}" \
   --output-dir "${ANALYSIS_DIR}/natural"
 
 for condition in "${COND_A}" "${COND_B}"; do
-  uv run python -m src.tsfm_pretraining.scripts.aggregate_tsfm_loss_space \
+  uv run python -m src.scripts.aggregate_tsfm_loss_space \
     --run "${condition}_A=${RUN_ROOT}/scale_${condition}_A" \
     --run "${condition}_B=${RUN_ROOT}/scale_${condition}_B" \
     --scale-pair "${condition}_A=${condition}_B" \

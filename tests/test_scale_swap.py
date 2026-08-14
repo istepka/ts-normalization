@@ -5,8 +5,7 @@ from hydra import compose, initialize
 from omegaconf import OmegaConf
 
 from main import build_run_specs
-from src.loss_space.data import RealScaleSwapDataset
-from src.loss_space.train import Trainer
+from src.data.loss_space import RealScaleSwapDataset
 from src.plotting.scripts.reproducibility.real_scale_swap.aggregate_crossover import (
     BASE_MODES,
     LR_ADJUSTED_MODE,
@@ -29,6 +28,7 @@ from src.scripts.permutation_schedule import (
     assignment_pair,
     validate_schedule,
 )
+from src.training.loss_space import Trainer
 
 
 def scale_swap_cfg(paths, scales):

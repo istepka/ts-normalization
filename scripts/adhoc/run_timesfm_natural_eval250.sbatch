@@ -26,7 +26,7 @@ job_tag=timesfm_natural_eval250_${SLURM_ARRAY_JOB_ID}
 run_root=$(output_path experiments "tsfm_pretraining/timesfm" "$job_tag")
 run_dir="${run_root}/seed${seed}_${condition}_natural"
 
-PYTHONPATH=. uv run python -m src.tsfm_pretraining.train \
+PYTHONPATH=. uv run python -m src.training.tsfm \
   --config-name=tsfm_timesfm \
   device=cuda \
   condition="$condition" \

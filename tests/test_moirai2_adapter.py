@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
-from src.tsfm_pretraining import moirai2_adapter as ma
-from src.tsfm_pretraining import window_index as wi
+from src.data.gifteval import window_index as wi
+from src.models import moirai2 as ma
 
 
 def _tiny_config() -> ma.Moirai2Config:

@@ -159,7 +159,7 @@ fi
 
 echo "model=${MODEL} task ${SLURM_ARRAY_TASK_ID}: seed=${SEED} condition=${CONDITION} kind=${KIND} assignment=${ASSIGNMENT} -> ${run_dir}"
 
-PYTHONPATH=. uv run python -m src.tsfm_pretraining.train \
+PYTHONPATH=. uv run python -m src.training.tsfm \
   --config-name="tsfm_${MODEL}" \
   device=cuda \
   condition="${CONDITION}" \
