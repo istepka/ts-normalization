@@ -6,13 +6,12 @@ vendor/moment/REVISION) with:
 - deterministic masked-window batches, built from the shared WindowIndex's
   per-window `mask_seed` via `torch.random.fork_rng` so the global RNG state
   used for model init / data order elsewhere is never disturbed
-- both loss-space conditions from the plan:
-  - `moment_normalized`: MOMENT's native objective, MSE between the
-    normalized decoder output and the normalized target (RevIN-normalized
-    with the same statistics used internally by the forward pass).
-  - `moment_original`: identical forward pass and mask, but MSE is computed
-    between the denormalized (original-space) reconstruction and the
-    original-space target.
+- both loss-space conditions from the plan, expressed through
+  `src/models/normalization.py` rather than the backbone's own RevIN:
+  - `moment_normalized`: MOMENT's native objective, MSE in normalized space
+    (`SIT`).
+  - `moment_original`: identical forward pass and mask, but MSE between the
+    denormalized reconstruction and the original-space target (`RevIN`).
 - masked vs unmasked error, gradient norms before/after clipping, and the
   per-source dispersion metrics from losses.py
 
@@ -29,10 +28,13 @@ import pandas as pd
 import torch
 
 from src.data.gifteval import window_index as wi
+from src.models import norm_shims, normalization
 from src.models.vendor.moment import MOMENT
 
 MOMENT_REVISION = "38f7310ad594100747ca2a8357e9c7ca7d323e0e"
 CONDITIONS = ("moment_normalized", "moment_original")
+# MOMENT's own RevIN, reproduced exactly (see tests/test_normalization.py).
+NORM_SCHEME = normalization.MomentRevINScheme(eps=1e-5)
 
 
 @dataclass(frozen=True)
@@ -89,7 +91,11 @@ def build_moment_model(config: MomentConfig, seed: int) -> MOMENT:
             freeze_head=False,
             revin_affine=False,
         )
-        return MOMENT(model_config)
+        model = MOMENT(model_config)
+        # `src/models/normalization.py` owns the transform now, so the
+        # backbone must not normalize a second time.
+        norm_shims.disable_moment_normalization(model)
+        return model
     finally:
         torch.random.set_rng_state(generator_state)
 
@@ -189,14 +195,36 @@ def forward(model: MOMENT, batch: MomentBatch, condition: str) -> MomentForwardR
             f"unknown condition {condition!r}, must be one of {CONDITIONS}"
         )
 
+    module = (
+        normalization.SIT(NORM_SCHEME)
+        if condition == "moment_normalized"
+        else normalization.RevIN(NORM_SCHEME)
+    )
+
     # Masking.generate_mask draws on batch.x_enc.device's RNG stream (see
     # vendor/moment/utils/masking.py); fork_rng must cover that device too or
     # a GPU run silently uses (and permanently advances) the unseeded global
     # CUDA RNG instead of the deterministic per-window batch_seed.
+    #
+    # The mask is drawn here rather than inside the forward pass because
+    # MOMENT's statistics come from `mask * input_mask`, which keeps the
+    # positions being reconstructed out of them. Drawing it first, in the same
+    # fork and before any other RNG consumer, leaves the stream identical to
+    # letting the model draw it internally.
     fork_devices = [batch.x_enc.device] if batch.x_enc.device.type == "cuda" else []
     with torch.random.fork_rng(devices=fork_devices):
         torch.manual_seed(batch.batch_seed)
-        out = model(x_enc=batch.x_enc, input_mask=batch.input_mask)
+        pretrain_mask = model.mask_generator.generate_mask(
+            x=batch.x_enc, input_mask=batch.input_mask
+        ).to(batch.x_enc.device)
+        z_context, stats = module.transform_input(
+            batch.x_enc.squeeze(1), pretrain_mask * batch.input_mask
+        )
+        out = model(
+            x_enc=z_context.unsqueeze(1),
+            input_mask=batch.input_mask,
+            mask=pretrain_mask,
+        )
 
     reconstructed_mask = (
         1.0 - out.pretrain_mask
@@ -209,28 +237,36 @@ def forward(model: MOMENT, batch: MomentBatch, condition: str) -> MomentForwardR
     train_mask = (reconstructed_mask * batch.input_mask).unsqueeze(1)
     input_mask_ch = batch.input_mask.unsqueeze(1)
 
+    # The backbone's normalizer is the identity, so its "reconstruction" is
+    # still in normalized space and the inverse is applied here instead.
     normalized_recon = out.metadata["normalized_reconstruction"]
-    revin_mean = out.metadata["revin_mean"]
-    revin_stdev = out.metadata["revin_stdev"]
-    normalized_target = (batch.x_enc - revin_mean) / revin_stdev
+    reconstruction = stats.inverse(normalized_recon)
+    normalized_target = stats.forward(batch.x_enc)
 
     normalized_mse = pointwise.masked_mse(
         normalized_recon, normalized_target, train_mask, reduction="none"
     )
     original_mse = pointwise.masked_mse(
-        out.reconstruction, batch.x_enc, train_mask, reduction="none"
+        reconstruction, batch.x_enc, train_mask, reduction="none"
     )
     unmasked_mse = pointwise.masked_mse(
-        out.reconstruction, batch.x_enc, input_mask_ch, reduction="none"
+        reconstruction, batch.x_enc, input_mask_ch, reduction="none"
     )
 
-    per_example = normalized_mse if condition == "moment_normalized" else original_mse
+    # The condition is the whole difference: SIT scores in normalized space,
+    # RevIN in original space, off the same forward pass and the same mask.
+    loss_output, loss_target = module.transform_target_and_output(
+        normalized_recon, batch.x_enc, stats
+    )
+    per_example = pointwise.masked_mse(
+        loss_output, loss_target, train_mask, reduction="none"
+    )
 
     # MASE numerator and denominator both live in the original space, so the
     # controlled scale multiplier cancels and the metric stays comparable
     # across scale assignments and across conditions.
     original_mae = pointwise.masked_mae(
-        out.reconstruction, batch.x_enc, train_mask, reduction="none"
+        reconstruction, batch.x_enc, train_mask, reduction="none"
     )
     periods = torch.as_tensor(
         [seasonality.seasonal_period(f) for f in batch.frequency],
@@ -247,7 +283,7 @@ def forward(model: MOMENT, batch: MomentBatch, condition: str) -> MomentForwardR
         normalized_mse=normalized_mse,
         original_mse=original_mse,
         mase=mase,
-        reconstruction=out.reconstruction,
+        reconstruction=reconstruction,
         pretrain_mask=out.pretrain_mask,
     )
 

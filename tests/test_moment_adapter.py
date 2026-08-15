@@ -45,8 +45,8 @@ def test_masked_reconstruction_shapes(tiny_corpus):
 
 
 def test_normalized_loss_matches_manual_recomputation(tiny_corpus):
-    """The normalized_mse the adapter reports must equal manually normalizing
-    the model's own reconstruction/target with its own RevIN statistics --
+    """The normalized loss the adapter reports must equal manually normalizing
+    the model's own reconstruction/target with the same per-window statistics,
     i.e. moment_normalized is genuinely computed pre-inverse-transform, not a
     rescaled copy of the original-space loss."""
     index, cache = _tiny_index(tiny_corpus)
@@ -54,21 +54,27 @@ def test_normalized_loss_matches_manual_recomputation(tiny_corpus):
     batch = ma.make_batch(index, rows, cache)
     model = ma.build_moment_model(_tiny_model_config(), seed=0)
 
+    result = ma.forward(model, batch, "moment_normalized")
+
+    # Recomputed independently of the adapter. MOMENT takes its statistics
+    # from the visible positions only, so the mask is drawn before they are.
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(batch.batch_seed)
-        out = model(x_enc=batch.x_enc, input_mask=batch.input_mask)
+        pretrain_mask = model.mask_generator.generate_mask(
+            x=batch.x_enc, input_mask=batch.input_mask
+        )
+        loc, scale = ma.NORM_SCHEME.statistics(
+            batch.x_enc.squeeze(1), pretrain_mask * batch.input_mask
+        )
+        normalized = (batch.x_enc - loc.view(-1, 1, 1)) / scale.view(-1, 1, 1)
+        out = model(x_enc=normalized, input_mask=batch.input_mask, mask=pretrain_mask)
 
-    mean, stdev = out.metadata["revin_mean"], out.metadata["revin_stdev"]
-    manual_normalized_target = (batch.x_enc - mean) / stdev
-    manual_diff = (
-        out.metadata["normalized_reconstruction"] - manual_normalized_target
-    ) ** 2
+    manual_diff = (out.metadata["normalized_reconstruction"] - normalized) ** 2
     train_mask = (1.0 - out.pretrain_mask) * batch.input_mask
     manual_mse = (manual_diff.squeeze(1) * train_mask).sum(dim=1) / train_mask.sum(
         dim=1
     ).clamp_min(1.0)
 
-    result = ma.forward(model, batch, "moment_normalized")
     assert torch.allclose(result.per_example_loss_masked, manual_mse, atol=1e-5)
 
 
