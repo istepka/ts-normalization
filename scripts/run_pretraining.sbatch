@@ -71,7 +71,7 @@ RUN_DATE=${RUN_DATE:-$(date +%F)}
 # The window index is a shared cache, not a run artifact: every paired run must
 # read the same file, so it lives at a stable path rather than a dated one.
 INDEX_DIR=${INDEX_DIR:-outputs/gifteval_window_index}
-INDEX=${INDEX:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
+INDEX=${INDEX:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}_heldout.parquet}
 STEPS=${STEPS:-30000}
 BATCH_SIZE=${BATCH_SIZE:-512}
 CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-6000}
@@ -125,6 +125,14 @@ case "${MODEL}" in
     )
     ;;
 esac
+
+# The two natural_mixture runs lead every RUNS list, so NATURAL_ONLY=1 drops
+# the four controlled_scale (scale-swap) runs by truncation. Array bounds must
+# shrink to match, which scripts/submit_pretraining.sh handles.
+NATURAL_ONLY=${NATURAL_ONLY:-0}
+if [ "${NATURAL_ONLY}" = "1" ]; then
+  RUNS=("${RUNS[@]:0:2}")
+fi
 
 if [ "${MODEL}" = "chronos2" ] || [ "${MODEL}" = "moirai2" ]; then
   IFS=, read -r -a SEEDS <<< "${SEEDS_CSV}"

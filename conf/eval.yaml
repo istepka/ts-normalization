@@ -8,6 +8,14 @@ seed: 0
 output_dir: outputs/eval
 batch_size: 256
 
+# Point this at a pretraining run directory and the model skeleton below is
+# replaced by that run's own `resolved_config.yaml`. Always prefer it over
+# trusting the defaults here to still match: the 2026-08-12 runs were trained
+# at d_ff 2048 and dropout 0.1, so rebuilding them from this file's skeleton
+# fails on a shape mismatch. `condition` is recorded for the collector.
+run_dir: null
+condition: null
+
 # native is the headline. fixed reproduces the training window shape as a
 # cross-check and yields nothing at all on M1/M3/Tourism, whose every series
 # is shorter than context + horizon. rolling exists only because the

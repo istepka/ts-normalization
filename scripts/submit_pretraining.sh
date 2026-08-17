@@ -14,6 +14,8 @@
 #   MODEL=timesfm STEPS=5000 scripts/submit_pretraining.sh   # dry run
 #   MODEL=chronos2 scripts/submit_pretraining.sh
 #   MODEL=moirai2 SEEDS_CSV=0,1 scripts/submit_pretraining.sh
+#   # natural scale only, 3 seeds, no scale swap (6 tasks)
+#   MODEL=chronos2 NATURAL_ONLY=1 SEEDS_CSV=0,1,2 scripts/submit_pretraining.sh
 #
 # To resubmit only failed MOMENT/TimesFM array tasks against the SAME output
 # namespace as an earlier submission (so aggregation still finds all 6 run
@@ -47,7 +49,7 @@ fi
 # The window index is a shared cache, not a run artifact: every paired run must
 # read the same file, so it lives at a stable path rather than a dated one.
 INDEX_DIR=${INDEX_DIR:-outputs/gifteval_window_index}
-export INDEX=${INDEX:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
+export INDEX=${INDEX:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}_heldout.parquet}
 export STEPS=${STEPS:-30000}
 export BATCH_SIZE=${BATCH_SIZE:-512}
 export CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-6000}
@@ -55,6 +57,38 @@ export EVAL_EVERY=${EVAL_EVERY:-250}
 export EVAL_BATCHES=${EVAL_BATCHES:-50}
 export EVAL_WINDOWS_PER_DATASET=${EVAL_WINDOWS_PER_DATASET:-64}
 export CONFIG_SIZE=${CONFIG_SIZE:-70m}
+# NATURAL_ONLY=1 keeps only the two natural_mixture runs per seed and drops the
+# four controlled_scale ones, so the array is a third of its usual size.
+export NATURAL_ONLY=${NATURAL_ONLY:-0}
+if [ "${NATURAL_ONLY}" = "1" ]; then
+  RUNS_PER_SEED=2
+else
+  RUNS_PER_SEED=6
+fi
+
+# Chains the held-out evaluation onto a pretraining array: one GPU task per
+# run, then a CPU collector that merges them into a single report. Set EVAL=0
+# to skip. MOMENT has no forecast head, so the harness does not score it.
+export EVAL=${EVAL:-1}
+submit_eval_chain() {
+  local array_job=$1 last_task=$2
+  if [ "${EVAL}" != "1" ] || [ "${MODEL}" = "moment" ]; then
+    return 0
+  fi
+  local eval_job collect_job
+  eval_job=$(sbatch --parsable --job-name="gifteval_${MODEL}_eval" \
+    --array="0-${last_task}%8" \
+    --dependency="afterok:${array_job}" \
+    scripts/eval_pretraining.sbatch)
+  collect_job=$(sbatch --parsable --job-name="gifteval_${MODEL}_eval_collect" \
+    --dependency="afterok:${eval_job}" \
+    scripts/collect_eval.sbatch)
+  echo "eval array job ${eval_job} (afterok ${array_job})"
+  echo "eval collect job ${collect_job} (afterok ${eval_job})"
+  local report_dir
+  report_dir="$(output_path analysis "tsfm_eval/${MODEL}" "${JOBTAG}")"
+  echo "reports will land at ${report_dir}/eval_report_{main,by_frequency}.md"
+}
 
 if [ "${MODEL}" = "chronos2" ] || [ "${MODEL}" = "moirai2" ]; then
   export SEEDS_CSV=${SEEDS_CSV:-0,1,2,3}
@@ -65,7 +99,7 @@ if [ "${MODEL}" = "chronos2" ] || [ "${MODEL}" = "moirai2" ]; then
   fi
 
   IFS=, read -r -a SEEDS <<< "${SEEDS_CSV}"
-  tasks=$((${#SEEDS[@]} * 6))
+  tasks=$((${#SEEDS[@]} * RUNS_PER_SEED))
   last_task=$((tasks - 1))
 
   ARRAY_JOB=$(sbatch --parsable --job-name="gifteval_${MODEL}" \
@@ -77,6 +111,9 @@ if [ "${MODEL}" = "chronos2" ] || [ "${MODEL}" = "moirai2" ]; then
   echo "tasks ${tasks}"
   echo "seeds ${SEEDS_CSV}"
   echo "maximum concurrent GPU jobs 8"
+
+  export JOBTAG="gifteval_${MODEL}_${ARRAY_JOB}"
+  submit_eval_chain "${ARRAY_JOB}" "${last_task}"
   exit 0
 fi
 
@@ -90,9 +127,10 @@ if [ ! -f "${INDEX}" ]; then
   DEPENDENCY_ARGS=(--dependency="afterok:${BUILD_JOB}")
 fi
 
-ARRAY_JOB=$(sbatch --parsable --job-name="gifteval_${MODEL}" --array="0-5" \
+ARRAY_JOB=$(sbatch --parsable --job-name="gifteval_${MODEL}" \
+  --array="0-$((RUNS_PER_SEED - 1))" \
   "${DEPENDENCY_ARGS[@]}" scripts/run_pretraining.sbatch)
-echo "array job: ${ARRAY_JOB} (6 tasks, model=${MODEL}, steps=${STEPS}, batch_size=${BATCH_SIZE}, checkpoint_every=${CHECKPOINT_EVERY})"
+echo "array job: ${ARRAY_JOB} (${RUNS_PER_SEED} tasks, model=${MODEL}, steps=${STEPS}, batch_size=${BATCH_SIZE}, checkpoint_every=${CHECKPOINT_EVERY})"
 
 export JOBTAG="gifteval_${MODEL}_${ARRAY_JOB}"
 AGG_JOB=$(sbatch --parsable --job-name="gifteval_${MODEL}_aggregate" \
@@ -100,3 +138,4 @@ AGG_JOB=$(sbatch --parsable --job-name="gifteval_${MODEL}_aggregate" \
   scripts/aggregate_pretraining.sbatch)
 echo "aggregate job: ${AGG_JOB} (depends on ${ARRAY_JOB} completing ok)"
 echo "outputs will land under $(output_path experiments "tsfm_pretraining/${MODEL}" "${JOBTAG}")"
+submit_eval_chain "${ARRAY_JOB}" "$((RUNS_PER_SEED - 1))"

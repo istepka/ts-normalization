@@ -29,7 +29,14 @@ def score_native(forecaster, series, batch_size: int) -> list[dict]:
     for subset, items in _by_subset(series).items():
         forecasts = predict.run(forecaster, items, batch_size=batch_size)
         metrics = score.score(forecasts, items)
-        rows.append({"subset": subset, "n_series": len(items), **_pool(metrics)})
+        rows.append(
+            {
+                "subset": subset,
+                "freq": _freq(items),
+                "n_series": len(items),
+                **_pool(metrics),
+            }
+        )
     return rows
 
 
@@ -46,13 +53,21 @@ def score_fixed(forecaster, series, batch_size: int) -> list[dict]:
             items, forecaster.context_length, forecaster.horizon
         )
         if not kept:
-            rows.append({"subset": subset, "n_series": 0, "n_dropped": dropped})
+            rows.append(
+                {
+                    "subset": subset,
+                    "freq": _freq(items),
+                    "n_series": 0,
+                    "n_dropped": dropped,
+                }
+            )
             continue
         forecasts = predict.run(forecaster, kept, batch_size=batch_size)
         metrics = score.score(forecasts, kept)
         rows.append(
             {
                 "subset": subset,
+                "freq": _freq(items),
                 "n_series": len(kept),
                 "n_dropped": dropped,
                 **_pool(metrics),
@@ -76,7 +91,14 @@ def score_rolling(forecaster, series, cfg) -> list[dict]:
             item for item in items if len(item.history) + len(item.actual) >= needed
         ]
         if not usable:
-            rows.append({"subset": subset, "n_series": 0, "skipped": "too short"})
+            rows.append(
+                {
+                    "subset": subset,
+                    "freq": _freq(items),
+                    "n_series": 0,
+                    "skipped": "too short",
+                }
+            )
             continue
         sample = usable[: int(cfg.rolling.max_series_per_subset)]
         rolling = predict.run_rolling(
@@ -90,6 +112,7 @@ def score_rolling(forecaster, series, cfg) -> list[dict]:
         rows.append(
             {
                 "subset": subset,
+                "freq": _freq(items),
                 "n_series": len(sample),
                 "n_too_short": len(items) - len(usable),
                 **score.score_stability(rolling),
@@ -105,12 +128,50 @@ def _by_subset(series):
     return dict(sorted(grouped.items()))
 
 
+def _freq(items) -> str:
+    """The frequency label a subset is reported under.
+
+    Subsets are frequency-homogeneous in every suite (GIFT-Eval keys its
+    configs as `dataset/frequency`, and the Monash and M4 suites split by
+    frequency outright), so a subset carrying more than one is a loader bug
+    rather than something to average over. M3 Other declares no frequency.
+    """
+    labels = sorted({item.freq for item in items if item.freq is not None})
+    if not labels:
+        return "none"
+    if len(labels) > 1:
+        raise ValueError(f"subset {items[0].subset!r} mixes frequencies {labels}")
+    return labels[0]
+
+
 def _pool(metrics):
     return accuracy.pool(metrics)
 
 
+def adopt_run_config(cfg: DictConfig) -> None:
+    """Replaces the model skeleton with the one the checkpoint was trained on.
+
+    A checkpoint only loads into the architecture that produced it, so the
+    skeleton in `conf/eval.yaml` is a default rather than a source of truth.
+    Taking `model` and its block from the run's own `resolved_config.yaml`
+    removes the chance of scoring a checkpoint under a skeleton that merely
+    happens to load.
+    """
+    resolved = Path(cfg.run_dir) / "resolved_config.yaml"
+    if not resolved.is_file():
+        raise FileNotFoundError(f"no resolved_config.yaml in {cfg.run_dir}")
+    run_cfg = OmegaConf.load(resolved)
+    cfg.model = run_cfg.model
+    cfg[cfg.model] = run_cfg[cfg.model]
+    cfg.condition = run_cfg.condition
+    cfg.seed = run_cfg.seed
+    print(f"model skeleton adopted from {resolved}", flush=True)
+
+
 @hydra.main(version_base=None, config_path="../../conf", config_name="eval")
 def main(cfg: DictConfig) -> None:
+    if cfg.run_dir is not None:
+        adopt_run_config(cfg)
     checkpoint = Path(cfg.checkpoint)
     if not checkpoint.is_file():
         raise FileNotFoundError(f"no checkpoint at {checkpoint}")
@@ -143,6 +204,11 @@ def main(cfg: DictConfig) -> None:
             print(f"  {mode}: {len(rows)} subsets scored", flush=True)
 
     table = pd.DataFrame(records)
+    # Identity travels in the rows so the collector can concatenate the runs
+    # without parsing directory names back into condition and seed.
+    table.insert(0, "seed", cfg.seed)
+    table.insert(0, "condition", cfg.condition)
+    table.insert(0, "model", cfg.model)
     table.to_csv(out_dir / "eval_by_subset.csv", index=False)
 
     # Suite-level rows weight subsets by series count, and the per-subset CSV

@@ -35,7 +35,10 @@ STRIDE=${STRIDE:-512}
 # The window index is a shared cache, not a run artifact: every paired run must
 # read the same file, so it lives at a stable path rather than a dated one.
 INDEX_DIR=${INDEX_DIR:-outputs/gifteval_window_index}
-OUTPUT=${OUTPUT:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}.parquet}
+# The default carries the _heldout suffix because the default --exclude below
+# is non-empty: an index built here is a held-out index, and training raises on
+# one that still contains the excluded datasets.
+OUTPUT=${OUTPUT:-${INDEX_DIR}/context${CONTEXT_LENGTH}_pred${PREDICTION_LENGTH}_heldout.parquet}
 mkdir -p "$(dirname "${OUTPUT}")"
 
 uv run python -m src.scripts.build_gifteval_window_index \
