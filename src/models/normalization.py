@@ -15,9 +15,9 @@ The statistics are returned rather than stored on the module so that gradient
 accumulation, evaluation interleaved with training, and DDP cannot cross
 contaminate.
 
-Schemes are registered by name because they are not cosmetically different:
-epsilon placement, Bessel correction, NaN handling, and (for Chronos-2) a
-nonlinearity all vary between upstream implementations.
+Nothing here knows about any particular backbone. The schemes are named for the
+statistic they compute, and each adapter says which one it needs by subclassing
+`BackboneNormalization` in its own module.
 """
 
 from abc import ABC, abstractmethod
@@ -60,6 +60,11 @@ class NormalizationScheme(ABC):
     `scale_floor` is the smallest scale the scheme can report. A window sitting
     on it is constant to within numerical tolerance and carries no usable
     normalized-space target, which callers flag as degenerate.
+
+    The default `forward`/`inverse` are affine. A scheme whose transform is not
+    affine overrides both, and `TransformStats` routes through the scheme
+    rather than through a bare `(loc, scale)` pair so that callers do not have
+    to know which kind they hold.
     """
 
     scale_floor: float
@@ -82,7 +87,7 @@ class NormalizationScheme(ABC):
 
 
 class StandardScheme(NormalizationScheme):
-    """Mean and standard deviation over valid positions, epsilon added after.
+    """Mean and Bessel-corrected std over valid positions, epsilon added after.
 
     Matches `PatchTransformer.normalize`.
     """
@@ -103,11 +108,16 @@ class StandardScheme(NormalizationScheme):
         return loc, scale
 
 
-class MomentRevINScheme(NormalizationScheme):
-    """MOMENT's RevIN: NaN-masked mean and uncorrected std, epsilon added after.
+class PopulationStdScheme(NormalizationScheme):
+    """Uncorrected std over valid positions via NaN reduction, epsilon after.
 
-    `vendor/moment/models/layers/revin.py` masks invalid positions to NaN and
-    reduces with nanmean, which is the uncorrected (population) variance.
+    Kept separate from `StandardScheme(correction=0)` rather than folded into
+    it because the NaN reduction is a real behavioral difference and not just
+    an arithmetic one. A window with no valid positions yields NaN statistics
+    here and clamped ones there.
+
+    This is what MOMENT's RevIN computes, pinned in
+    `tests/test_moment_adapter.py`.
     """
 
     def __init__(self, eps: float = 1e-5):
@@ -124,17 +134,75 @@ class MomentRevINScheme(NormalizationScheme):
         return loc, scale
 
 
-class Chronos2Scheme(NormalizationScheme):
-    """Chronos-2's InstanceNorm: standardize, then optionally arcsinh.
+class FlooredStdScheme(NormalizationScheme):
+    """Bessel-corrected std with the floor added under the square root.
 
-    The arcsinh is not a loc/scale operation, which is why this scheme
-    overrides `forward` and `inverse` rather than reusing the affine default.
-    It is invertible (`sinh` is exact) but not affine, so this model's
-    normalized and original spaces are related nonlinearly where the other
-    three are related by an exact affine map.
+    Adding the floor to the variance rather than to the resulting scale makes
+    the smallest reportable scale its square root, which is why this cannot be
+    expressed as `StandardScheme` with a different epsilon.
 
-    `inverse` casts to float32 before `sinh`, matching upstream, because sinh
-    overflows quickly in reduced precision.
+    This is what uni2ts's `PackedStdScaler` computes, pinned in
+    `tests/test_moirai2_adapter.py`.
+    """
+
+    def __init__(self, correction: int = 1, minimum_scale: float = 1e-5):
+        self.correction = correction
+        self.minimum_scale = minimum_scale
+        self.scale_floor = minimum_scale**0.5
+
+    def statistics(
+        self, source: torch.Tensor, valid: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        x = source.double()
+        mask = valid.double()
+        count = mask.sum(dim=-1)
+        loc = torch.where(count > 0, (x * mask).sum(dim=-1) / count.clamp_min(1.0), 0.0)
+        centered = (x - loc.unsqueeze(-1)).square() * mask
+        denominator = count - self.correction
+        variance = torch.where(
+            denominator > 0, centered.sum(dim=-1) / denominator.clamp_min(1.0), 0.0
+        )
+        scale = (variance + self.minimum_scale).sqrt()
+        return loc.float(), scale.float()
+
+
+class AbsMeanScheme(NormalizationScheme):
+    """Zero location, mean absolute value scale.
+
+    This is what uni2ts's `PackedAbsMeanScaler` computes, pinned in
+    `tests/test_moirai2_adapter.py`.
+    """
+
+    def __init__(self):
+        self.scale_floor = 0.0
+
+    def statistics(
+        self, source: torch.Tensor, valid: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        x = source.double()
+        mask = valid.double()
+        count = mask.sum(dim=-1)
+        scale = torch.where(
+            count > 0, (x.abs() * mask).sum(dim=-1) / count.clamp_min(1.0), 0.0
+        )
+        return torch.zeros_like(scale).float(), scale.float()
+
+
+class ArcsinhStdScheme(NormalizationScheme):
+    """Standardize, then arcsinh. Invertible but not affine.
+
+    The arcsinh is not a loc/scale operation, so this scheme overrides
+    `forward` and `inverse` instead of reusing the affine default. It is fully
+    reversible, `sinh` being its exact inverse, but the normalized and original
+    spaces are related nonlinearly rather than by a per-window constant. That
+    matters when comparing loss spaces, so it belongs in the paper's model
+    table.
+
+    `inverse` casts to float32 before `sinh` because sinh overflows quickly in
+    reduced precision.
+
+    This is what Chronos-2's `InstanceNorm` computes, pinned in
+    `tests/test_chronos2_adapter.py`.
     """
 
     def __init__(self, eps: float = 1e-5, use_arcsinh: bool = True):
@@ -172,154 +240,11 @@ class Chronos2Scheme(NormalizationScheme):
         return (z * scale + loc).to(original_dtype)
 
 
-class Moirai2StdScheme(NormalizationScheme):
-    """uni2ts `PackedStdScaler`: Bessel-corrected variance, floor under the sqrt.
-
-    Upstream adds `minimum_scale` to the variance before taking the square
-    root rather than to the resulting scale, so the smallest reportable scale
-    is its square root.
-    """
-
-    def __init__(self, correction: int = 1, minimum_scale: float = 1e-5):
-        self.correction = correction
-        self.minimum_scale = minimum_scale
-        self.scale_floor = minimum_scale**0.5
-
-    def statistics(
-        self, source: torch.Tensor, valid: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        x = source.double()
-        mask = valid.double()
-        count = mask.sum(dim=-1)
-        loc = torch.where(count > 0, (x * mask).sum(dim=-1) / count.clamp_min(1.0), 0.0)
-        centered = (x - loc.unsqueeze(-1)).square() * mask
-        denominator = count - self.correction
-        variance = torch.where(
-            denominator > 0, centered.sum(dim=-1) / denominator.clamp_min(1.0), 0.0
-        )
-        scale = (variance + self.minimum_scale).sqrt()
-        return loc.float(), scale.float()
-
-
-class Moirai2AbsMeanScheme(NormalizationScheme):
-    """uni2ts `PackedAbsMeanScaler`: zero location, mean absolute value scale."""
-
-    def __init__(self):
-        self.scale_floor = 0.0
-
-    def statistics(
-        self, source: torch.Tensor, valid: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        x = source.double()
-        mask = valid.double()
-        count = mask.sum(dim=-1)
-        scale = torch.where(
-            count > 0, (x.abs() * mask).sum(dim=-1) / count.clamp_min(1.0), 0.0
-        )
-        return torch.zeros_like(scale).float(), scale.float()
-
-
-class TimesFMScheme(NormalizationScheme):
-    """TimesFM's instance norm, in either of the two modes this repo uses.
-
-    `first_patch` reproduces vendored `_masked_mean_std`, which takes the
-    statistics of the first patch holding more than three unpadded values.
-    `whole_context` takes them over the entire valid context instead, which is
-    this repo's causal variant (see `timesfm._preprocess_whole_context`).
-
-    `forward` reproduces `_forward_transform`'s pad_val overwrite, which resets
-    positions that were already the padding sentinel back to it after scaling.
-    """
-
-    MODES = ("first_patch", "whole_context")
-
-    def __init__(
-        self,
-        mode: str = "first_patch",
-        patch_len: int = 32,
-        tolerance: float = 1e-6,
-        pad_val: float = 1123581321.0,
-    ):
-        if mode not in self.MODES:
-            raise ValueError(f"mode must be one of {self.MODES}, got {mode!r}")
-        self.mode = mode
-        self.patch_len = patch_len
-        self.tolerance = tolerance
-        self.pad_val = pad_val
-        self.scale_floor = tolerance
-
-    def statistics(
-        self, source: torch.Tensor, valid: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size = source.shape[0]
-        patched = source.view(batch_size, -1, self.patch_len)
-        pads = (1.0 - valid).view(batch_size, -1, self.patch_len)
-        patched = torch.where(torch.abs(pads - 1.0) < self.tolerance, 0.0, patched)
-        pads = torch.where(
-            torch.abs(patched - self.pad_val) < self.tolerance,
-            torch.ones_like(pads),
-            pads,
-        )
-
-        if self.mode == "whole_context":
-            unpadded = 1.0 - pads
-            count = unpadded.sum(dim=(1, 2)).clamp_min(1.0)
-            loc = (patched * unpadded).sum(dim=(1, 2)) / count
-            centered = (patched - loc[:, None, None]) * unpadded
-            scale = (centered.square().sum(dim=(1, 2)) / count).clamp_min(0.0).sqrt()
-            return loc, scale.clamp_min(self.tolerance)
-
-        # first_patch: the first patch with more than three unpadded values,
-        # falling back to the last patch when no patch qualifies.
-        unpadded_per_patch = (1.0 - pads).sum(dim=2)
-        qualifies = (unpadded_per_patch >= 3).to(torch.int32)
-        indices = torch.argmax(qualifies, dim=1)
-        patch_index = torch.where(
-            qualifies.sum(dim=1) == 0, patched.shape[1] - 1, indices
-        )
-        rows = torch.arange(batch_size, device=source.device)
-        selected = patched[rows, patch_index, :]
-        mask = 1.0 - pads[rows, patch_index, :]
-
-        count = mask.sum(dim=1).clamp_min(1.0)
-        loc = (selected * mask).sum(dim=1) / count
-        centered = (selected - loc.unsqueeze(-1)) * mask
-        variance = (centered.square().sum(dim=1) / count).clamp_min(0.0)
-        return loc, variance.sqrt().clamp_min(self.tolerance)
-
-    def forward(
-        self, x: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor
-    ) -> torch.Tensor:
-        normalized = (x - loc) / scale
-        return torch.where(
-            torch.abs(x - self.pad_val) < self.tolerance,
-            torch.tensor(self.pad_val, dtype=normalized.dtype, device=x.device),
-            normalized,
-        )
-
-
-SCHEMES = {
-    "std": StandardScheme,
-    "moment_revin": MomentRevINScheme,
-    "chronos2": Chronos2Scheme,
-    "moirai2_std": Moirai2StdScheme,
-    "moirai2_absmean": Moirai2AbsMeanScheme,
-    "timesfm": TimesFMScheme,
-}
-
-
-def build_scheme(name: str, **kwargs) -> NormalizationScheme:
-    if name not in SCHEMES:
-        raise ValueError(f"unknown scheme {name!r}, must be one of {tuple(SCHEMES)}")
-    return SCHEMES[name](**kwargs)
-
-
 class NormalizationModule(nn.Module, ABC):
     """Owns the normalization so the backbone and the loss do not.
 
-    Wrap a backbone whose own normalization has been disabled (see
-    `src/models/norm_shims.py`) and the three-line loop is the same for every
-    model:
+    Wrap a backbone whose own normalization has been disabled and the loop is
+    the same for every model:
 
         z_context, stats = norm.transform_input(context, valid)
         output = backbone(z_context)
@@ -415,3 +340,61 @@ class RevIN(NormalizationModule):
         stats: TransformStats,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return stats.inverse(output), target
+
+
+class BackboneNormalization(ABC):
+    """What one backbone contributes to the loss-space contrast.
+
+    Adding a baseline means subclassing this in that model's adapter module
+    and supplying three things:
+
+    1. `scheme`, the statistic the backbone normalizes with, either one from
+       this module or a subclass of `NormalizationScheme` if the backbone's
+       transform is entangled with its own data encoding.
+    2. `normalized_condition` and `original_condition`, the two condition
+       names the training config selects between. They are named rather than
+       positional because the existing adapters do not agree on an order.
+    3. `disable`, which makes the backbone's built-in normalization the
+       identity so it does not normalize a second time.
+
+    `disable` lives here rather than in a shared module because it is the one
+    genuinely backbone-specific piece. It reaches into a particular attribute
+    or method of a particular vendored class, so it belongs next to the rest of
+    that model's quirks.
+    """
+
+    normalized_condition: str
+    original_condition: str
+
+    def __init__(self, scheme: NormalizationScheme):
+        self.scheme = scheme
+
+    @classmethod
+    def conditions(cls) -> tuple[str, str]:
+        """The two condition names, readable without building an instance.
+
+        A classmethod because most schemes need the model config to construct,
+        while the training loop validates `cfg.condition` before it has one.
+        """
+        return (cls.normalized_condition, cls.original_condition)
+
+    @abstractmethod
+    def disable(self, model) -> None:
+        """Turns the backbone's built-in normalization into the identity.
+
+        Must not edit vendored source. Swapping a submodule or rebinding a
+        method on the instance keeps the pinned upstream files byte-identical
+        to their REVISION.
+        """
+
+    def module(
+        self, condition: str, apply_causal_norm: bool = False
+    ) -> NormalizationModule:
+        """Returns the `SIT` or `RevIN` this condition asks for."""
+        if condition == self.normalized_condition:
+            return SIT(self.scheme, apply_causal_norm)
+        if condition == self.original_condition:
+            return RevIN(self.scheme, apply_causal_norm)
+        raise ValueError(
+            f"unknown condition {condition!r}, must be one of {self.conditions()}"
+        )

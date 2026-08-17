@@ -1,4 +1,7 @@
+import dataclasses
+
 import numpy as np
+import pytest
 import torch
 
 from src.data.gifteval import window_index as wi
@@ -439,3 +442,86 @@ def test_controlled_batches_standardize_before_applying_scale(tiny_corpus):
         batch_a.target / batch_a.scale[:, None],
         batch_b.target / batch_b.scale[:, None],
     )
+
+
+def test_scheme_reproduces_the_vendored_first_patch_transform():
+    """`TimesFMScheme` must equal the vendored `_preprocess_input` exactly."""
+    torch.manual_seed(0)
+    context = torch.randn(8, 128, dtype=torch.float32) * 100.0 + 5.0
+    valid = torch.ones(8, 128, dtype=torch.float32)
+    valid[0, :40] = 0.0
+    valid[3, 100:] = 0.0
+
+    model = tm.build_timesfm_model(tm.CONFIG_17M, seed=0)
+    _, _, (mu, sigma), _ = model._preprocess_input(
+        input_ts=context, input_padding=1.0 - valid
+    )
+
+    scheme = tm.TimesFMNormalization(tm.CONFIG_17M, mode="first_patch").scheme
+    loc, scale = scheme.statistics(context, valid)
+
+    assert torch.equal(loc, mu)
+    assert torch.equal(scale, sigma)
+
+
+def test_scheme_reproduces_the_whole_context_preprocessing():
+    torch.manual_seed(0)
+    context = torch.randn(8, 128, dtype=torch.float32) * 100.0 + 5.0
+    valid = torch.ones(8, 128, dtype=torch.float32)
+    valid[0, :40] = 0.0
+
+    model = tm.build_timesfm_model(tm.CONFIG_17M, seed=0)
+    batch = tm.TimesFMBatch(
+        context=context,
+        context_padding=1.0 - valid,
+        target=torch.zeros(context.shape[0], tm.CONFIG_17M.horizon_len),
+        target_valid=torch.ones(context.shape[0], tm.CONFIG_17M.horizon_len),
+        freq=torch.zeros(context.shape[0], 1, dtype=torch.long),
+        dataset=np.array(["d"] * context.shape[0]),
+        domain=np.array(["x"] * context.shape[0]),
+        frequency=np.array(["H"] * context.shape[0]),
+        scale=torch.ones(context.shape[0]),
+    )
+    _, _, (mu, sigma) = tm._preprocess_whole_context(model, batch)
+
+    scheme = tm.TimesFMNormalization(tm.CONFIG_17M, mode="whole_context").scheme
+    loc, scale = scheme.statistics(context, valid)
+
+    assert torch.equal(loc, mu)
+    assert torch.equal(scale, sigma)
+
+
+def test_disabled_backbone_reproduces_the_original_bit_identically(tiny_corpus):
+    """Normalizing outside the backbone must move no training numerics."""
+    config = _tiny_config()
+    index, cache = _tiny_index(tiny_corpus, 64, config.horizon_len)
+    rows = index.split("train").sample(n=4, random_state=0)
+    batch = tm.make_batch(index, rows, cache, config.horizon_len)
+
+    reference = tm.build_timesfm_model(config, seed=0)
+    reference.eval()
+    with torch.no_grad():
+        normalized_reference, original_reference, _ = tm.run_decoder(reference, batch)
+
+    external = tm.build_timesfm_model(config, seed=0)
+    backbone = tm.TimesFMNormalization(config, mode="first_patch")
+    backbone.disable(external)
+    external.eval()
+
+    module = backbone.module("timesfm_normalized")
+    z_context, stats = module.transform_input(
+        batch.context, 1.0 - batch.context_padding
+    )
+    with torch.no_grad():
+        normalized_external, _, _ = tm.run_decoder(
+            external, dataclasses.replace(batch, context=z_context)
+        )
+
+    assert torch.equal(normalized_reference, normalized_external)
+    # RevIN reads the same forward pass in the original space.
+    assert torch.equal(stats.inverse(normalized_external), original_reference)
+
+
+def test_scheme_rejects_an_unknown_mode():
+    with pytest.raises(ValueError, match="mode must be one of"):
+        tm.TimesFMScheme(mode="sideways")

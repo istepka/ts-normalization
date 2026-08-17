@@ -32,6 +32,7 @@ file. Expected controlled-scale scaling: MSE contribution ~ b**2, pinball
 contribution ~ b (see the plan's "TimesFM stage" section).
 """
 
+import types
 from dataclasses import dataclass
 
 import numpy as np
@@ -39,6 +40,7 @@ import pandas as pd
 import torch
 
 from src.data.gifteval import window_index as wi
+from src.models import normalization
 from src.models.vendor.timesfm_v1.pytorch_patched_decoder import (
     PatchedTimeSeriesDecoder,
     TimesFMConfig,
@@ -46,9 +48,127 @@ from src.models.vendor.timesfm_v1.pytorch_patched_decoder import (
 )
 
 TIMESFM_REVISION = "705685c9122eeecc53e57285e44598c3453acb60"
-CONDITIONS = ("timesfm_native_original", "timesfm_normalized")
 NORMALIZATION_MODES = ("first_patch", "whole_context")
 OBJECTIVES = ("mse", "combined")
+
+
+class TimesFMScheme(normalization.NormalizationScheme):
+    """TimesFM's instance norm, in either of the two modes this repo uses.
+
+    This scheme stays in the adapter rather than in `normalization.py` because
+    it is entangled with TimesFM's data encoding rather than being a general
+    statistic. Padding is carried in-band as the sentinel value `pad_val`, and
+    `forward` has to re-stamp it after scaling, which is upstream's behavior.
+
+    `first_patch` reproduces vendored `_masked_mean_std`, which takes the
+    statistics of the first patch holding more than three unpadded values.
+    `whole_context` takes them over the entire valid context instead, which is
+    this repo's causal variant (see `_preprocess_whole_context`).
+    """
+
+    def __init__(
+        self,
+        mode: str = "first_patch",
+        patch_len: int = 32,
+        tolerance: float = 1e-6,
+        pad_val: float = 1123581321.0,
+    ):
+        if mode not in NORMALIZATION_MODES:
+            raise ValueError(f"mode must be one of {NORMALIZATION_MODES}, got {mode!r}")
+        self.mode = mode
+        self.patch_len = patch_len
+        self.tolerance = tolerance
+        self.pad_val = pad_val
+        self.scale_floor = tolerance
+
+    def statistics(
+        self, source: torch.Tensor, valid: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        batch_size = source.shape[0]
+        patched = source.view(batch_size, -1, self.patch_len)
+        pads = (1.0 - valid).view(batch_size, -1, self.patch_len)
+        patched = torch.where(torch.abs(pads - 1.0) < self.tolerance, 0.0, patched)
+        pads = torch.where(
+            torch.abs(patched - self.pad_val) < self.tolerance,
+            torch.ones_like(pads),
+            pads,
+        )
+
+        if self.mode == "whole_context":
+            unpadded = 1.0 - pads
+            count = unpadded.sum(dim=(1, 2)).clamp_min(1.0)
+            loc = (patched * unpadded).sum(dim=(1, 2)) / count
+            centered = (patched - loc[:, None, None]) * unpadded
+            scale = (centered.square().sum(dim=(1, 2)) / count).clamp_min(0.0).sqrt()
+            return loc, scale.clamp_min(self.tolerance)
+
+        # first_patch: the first patch with more than three unpadded values,
+        # falling back to the last patch when no patch qualifies.
+        unpadded_per_patch = (1.0 - pads).sum(dim=2)
+        qualifies = (unpadded_per_patch >= 3).to(torch.int32)
+        indices = torch.argmax(qualifies, dim=1)
+        patch_index = torch.where(
+            qualifies.sum(dim=1) == 0, patched.shape[1] - 1, indices
+        )
+        rows = torch.arange(batch_size, device=source.device)
+        selected = patched[rows, patch_index, :]
+        mask = 1.0 - pads[rows, patch_index, :]
+
+        count = mask.sum(dim=1).clamp_min(1.0)
+        loc = (selected * mask).sum(dim=1) / count
+        centered = (selected - loc.unsqueeze(-1)) * mask
+        variance = (centered.square().sum(dim=1) / count).clamp_min(0.0)
+        return loc, variance.sqrt().clamp_min(self.tolerance)
+
+    def forward(
+        self, x: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        normalized = (x - loc) / scale
+        return torch.where(
+            torch.abs(x - self.pad_val) < self.tolerance,
+            torch.tensor(self.pad_val, dtype=normalized.dtype, device=x.device),
+            normalized,
+        )
+
+
+class TimesFMNormalization(normalization.BackboneNormalization):
+    """TimesFM's instance norm, reproduced exactly.
+
+    `disable` rebinds two methods rather than swapping a submodule, because
+    TimesFM's normalization is `_forward_transform`/`_reverse_transform` on the
+    decoder itself and there is no attribute to replace. Binding on the
+    instance leaves the vendored class untouched.
+    """
+
+    normalized_condition = "timesfm_normalized"
+    original_condition = "timesfm_native_original"
+
+    def __init__(self, config: TimesFMConfig, mode: str = "first_patch"):
+        super().__init__(
+            TimesFMScheme(
+                mode=mode,
+                patch_len=config.patch_len,
+                tolerance=config.tolerance,
+                pad_val=config.pad_val,
+            )
+        )
+
+    def disable(self, model: PatchedTimeSeriesDecoder) -> None:
+        def _forward_transform(self, inputs, patched_pads):
+            mu = torch.zeros(inputs.shape[0], dtype=inputs.dtype, device=inputs.device)
+            sigma = torch.ones(
+                inputs.shape[0], dtype=inputs.dtype, device=inputs.device
+            )
+            return inputs, (mu, sigma)
+
+        def _reverse_transform(self, outputs, stats):
+            return outputs
+
+        model._forward_transform = types.MethodType(_forward_transform, model)
+        model._reverse_transform = types.MethodType(_reverse_transform, model)
+
+
+CONDITIONS = TimesFMNormalization.conditions()
 
 # ~17.7M params: smoke-test config (see notes/agentic_logs for the search that
 # picked these dims against PatchedTimeSeriesDecoder's actual parameter count).

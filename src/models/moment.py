@@ -28,13 +28,61 @@ import pandas as pd
 import torch
 
 from src.data.gifteval import window_index as wi
-from src.models import norm_shims, normalization
+from src.models import normalization
 from src.models.vendor.moment import MOMENT
 
 MOMENT_REVISION = "38f7310ad594100747ca2a8357e9c7ca7d323e0e"
-CONDITIONS = ("moment_normalized", "moment_original")
-# MOMENT's own RevIN, reproduced exactly (see tests/test_normalization.py).
-NORM_SCHEME = normalization.MomentRevINScheme(eps=1e-5)
+
+
+class IdentityRevIN(torch.nn.Module):
+    """Stands in for MOMENT's `RevIN` with the same call signature.
+
+    `mean` and `stdev` are exposed because the backbone writes them into its
+    output metadata, so a bare `nn.Identity` would break that read.
+    """
+
+    def __init__(self, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.affine = False
+        self.mean = torch.zeros(1)
+        self.stdev = torch.ones(1)
+
+    def forward(self, x: torch.Tensor, mode: str = "norm", mask=None):
+        if mode not in ("norm", "denorm"):
+            raise ValueError(f"mode must be 'norm' or 'denorm', got {mode!r}")
+        if mode == "norm":
+            self.mean = torch.zeros(
+                x.shape[0], x.shape[1], 1, dtype=x.dtype, device=x.device
+            )
+            self.stdev = torch.ones(
+                x.shape[0], x.shape[1], 1, dtype=x.dtype, device=x.device
+            )
+        return x
+
+
+class MomentNormalization(normalization.BackboneNormalization):
+    """MOMENT's RevIN, reproduced exactly. Pinned in test_moment_adapter.py.
+
+    MOMENT is the one backbone whose statistics are not a pure function of the
+    context. `vendor/moment/models/moment.py:303` derives them from
+    `mask * input_mask`, the randomly drawn pretrain mask intersected with the
+    input mask, which keeps the positions being reconstructed out of them.
+    `forward` below draws that mask itself and passes it back in.
+    """
+
+    normalized_condition = "moment_normalized"
+    original_condition = "moment_original"
+
+    def __init__(self):
+        super().__init__(normalization.PopulationStdScheme(eps=1e-5))
+
+    def disable(self, model: MOMENT) -> None:
+        model.normalizer = IdentityRevIN(eps=model.normalizer.eps)
+
+
+NORMALIZATION = MomentNormalization()
+CONDITIONS = MomentNormalization.conditions()
 
 
 @dataclass(frozen=True)
@@ -94,7 +142,7 @@ def build_moment_model(config: MomentConfig, seed: int) -> MOMENT:
         model = MOMENT(model_config)
         # `src/models/normalization.py` owns the transform now, so the
         # backbone must not normalize a second time.
-        norm_shims.disable_moment_normalization(model)
+        NORMALIZATION.disable(model)
         return model
     finally:
         torch.random.set_rng_state(generator_state)
@@ -190,16 +238,7 @@ class MomentForwardResult:
 
 
 def forward(model: MOMENT, batch: MomentBatch, condition: str) -> MomentForwardResult:
-    if condition not in CONDITIONS:
-        raise ValueError(
-            f"unknown condition {condition!r}, must be one of {CONDITIONS}"
-        )
-
-    module = (
-        normalization.SIT(NORM_SCHEME)
-        if condition == "moment_normalized"
-        else normalization.RevIN(NORM_SCHEME)
-    )
+    module = NORMALIZATION.module(condition)
 
     # Masking.generate_mask draws on batch.x_enc.device's RNG stream (see
     # vendor/moment/utils/masking.py); fork_rng must cover that device too or

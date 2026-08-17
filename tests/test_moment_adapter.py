@@ -3,6 +3,7 @@ import torch
 
 from src.data.gifteval import window_index as wi
 from src.models import moment as ma
+from src.models import normalization as norm
 
 
 def _tiny_model_config(context_length=32, patch_len=8):
@@ -63,7 +64,7 @@ def test_normalized_loss_matches_manual_recomputation(tiny_corpus):
         pretrain_mask = model.mask_generator.generate_mask(
             x=batch.x_enc, input_mask=batch.input_mask
         )
-        loc, scale = ma.NORM_SCHEME.statistics(
+        loc, scale = ma.NORMALIZATION.scheme.statistics(
             batch.x_enc.squeeze(1), pretrain_mask * batch.input_mask
         )
         normalized = (batch.x_enc - loc.view(-1, 1, 1)) / scale.view(-1, 1, 1)
@@ -213,3 +214,94 @@ def test_checkpoint_roundtrip(tiny_corpus, tmp_path):
     assert step == 1
     for p1, p2 in zip(model.parameters(), model2.parameters()):
         assert torch.equal(p1, p2)
+
+
+def test_scheme_reproduces_the_vendored_revin():
+    """`PopulationStdScheme` must equal MOMENT's own RevIN exactly.
+
+    If it drifts, disabling the backbone's normalizer silently changes
+    training numerics, which is the class of bug the module exists to prevent.
+    """
+    from src.models.vendor.moment.models.layers.revin import RevIN
+
+    torch.manual_seed(0)
+    context = torch.randn(8, 128, dtype=torch.float32) * 100.0 + 5.0
+    valid = torch.ones(8, 128, dtype=torch.float32)
+    valid[0, :40] = 0.0
+    valid[3, 100:] = 0.0
+
+    revin = RevIN(num_features=1, eps=1e-5, affine=False)
+    normalized = revin(x=context.unsqueeze(1), mask=valid, mode="norm")
+
+    scheme = ma.NORMALIZATION.scheme
+    loc, scale = scheme.statistics(context, valid)
+    assert torch.allclose(loc, revin.mean.squeeze(), atol=0, rtol=0)
+    assert torch.allclose(scale, revin.stdev.squeeze(), atol=0, rtol=0)
+
+    stats = norm.TransformStats(loc, scale, scale <= 1e-5, scheme)
+    assert torch.equal(stats.forward(context), normalized.squeeze(1))
+
+
+def test_disabled_backbone_reproduces_the_original_bit_identically(tiny_corpus):
+    """MOMENT normalizes over visible positions only, so the mask comes first.
+
+    `vendor/moment/models/moment.py:303` derives the RevIN statistics from
+    `mask * input_mask`, the randomly drawn pretrain mask intersected with the
+    input mask, which keeps the positions being reconstructed out of them.
+    Hoisting normalization out of this backbone therefore means hoisting the
+    mask draw with it and passing the mask back in.
+    """
+    from src.models.vendor.moment.models.layers.revin import RevIN
+
+    index, cache = _tiny_index(tiny_corpus)
+    rows = index.split("train").sample(n=4, random_state=0)
+    batch = ma.make_batch(index, rows, cache)
+
+    # build_moment_model disables the backbone's normalizer, so the
+    # pre-refactor reference is reconstructed by putting a real RevIN back.
+    reference = ma.build_moment_model(_tiny_model_config(), seed=0)
+    reference.normalizer = RevIN(num_features=1, eps=1e-5, affine=False)
+    # train() mode so dropout draws too: the mask must come off the same
+    # stream position it would have inside the forward pass.
+    reference.train()
+    with torch.random.fork_rng():
+        torch.manual_seed(batch.batch_seed)
+        with torch.no_grad():
+            out_reference = reference(x_enc=batch.x_enc, input_mask=batch.input_mask)
+
+    external = ma.build_moment_model(_tiny_model_config(), seed=0)
+    external.train()
+    module = ma.NORMALIZATION.module("moment_normalized")
+    with torch.random.fork_rng():
+        torch.manual_seed(batch.batch_seed)
+        drawn_mask = external.mask_generator.generate_mask(
+            x=batch.x_enc, input_mask=batch.input_mask
+        )
+        z_context, stats = module.transform_input(
+            batch.x_enc.squeeze(1), drawn_mask * batch.input_mask
+        )
+        with torch.no_grad():
+            out_external = external(
+                x_enc=z_context.unsqueeze(1),
+                input_mask=batch.input_mask,
+                mask=drawn_mask,
+            )
+
+    # Drawing the mask outside the forward pass must not move the RNG stream.
+    assert torch.equal(drawn_mask, out_reference.pretrain_mask)
+    assert torch.equal(
+        out_reference.metadata["normalized_reconstruction"],
+        out_external.metadata["normalized_reconstruction"],
+    )
+    assert torch.equal(
+        stats.inverse(out_external.metadata["normalized_reconstruction"]),
+        out_reference.reconstruction,
+    )
+
+
+def test_identity_revin_is_the_identity():
+    x = torch.randn(4, 1, 32) * 50.0
+    revin = ma.IdentityRevIN()
+
+    assert torch.equal(revin(x, mode="norm"), x)
+    assert torch.equal(revin(x, mode="denorm"), x)

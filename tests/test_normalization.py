@@ -1,9 +1,10 @@
-"""Every scheme must reproduce the backbone normalizer it replaces.
+"""The backbone-agnostic half of the normalization module.
 
-These are the tests that make the normalization module safe to adopt. If a
-scheme drifts from its upstream reference, swapping a backbone's internal
-normalization for this module silently changes training numerics, which is
-exactly the class of bug this refactor exists to prevent.
+Each scheme is pinned against the upstream implementation it reproduces in
+that model's own adapter test, since the reference lives there. What is tested
+here is the machinery every model shares: statistics threading, the SIT/RevIN
+contrast, causal statistics, and the `BackboneNormalization` prototype a new
+baseline subclasses.
 """
 
 import pytest
@@ -35,147 +36,40 @@ def test_standard_scheme_matches_patch_transformer(window):
     assert torch.allclose(scale, expected_scale, atol=1e-4)
 
 
-def test_moment_revin_scheme_matches_vendored_revin(window):
+def test_floored_std_scheme_floors_under_the_square_root(window):
+    """The floor is added to the variance, so the smallest scale is its root."""
+    context, _ = window
+    context = torch.zeros_like(context)
+    scheme = norm.FlooredStdScheme(correction=1, minimum_scale=1e-4)
+    _, scale = scheme.statistics(context, torch.ones_like(context))
+
+    assert torch.allclose(scale, torch.full_like(scale, 1e-2))
+    assert scheme.scale_floor == pytest.approx(1e-2)
+
+
+def test_abs_mean_scheme_has_zero_location(window):
     context, valid = window
-    from src.models.vendor.moment.models.layers.revin import RevIN
-
-    revin = RevIN(num_features=1, eps=1e-5, affine=False)
-    x = context.unsqueeze(1)
-    normalized = revin(x=x, mask=valid, mode="norm")
-
-    scheme = norm.MomentRevINScheme(eps=1e-5)
+    scheme = norm.AbsMeanScheme()
     loc, scale = scheme.statistics(context, valid)
 
-    assert torch.allclose(loc, revin.mean.squeeze(), atol=0, rtol=0)
-    assert torch.allclose(scale, revin.stdev.squeeze(), atol=0, rtol=0)
-
-    stats = norm.TransformStats(loc, scale, scale <= 1e-5, scheme)
-    assert torch.equal(stats.forward(context), normalized.squeeze(1))
+    assert torch.equal(loc, torch.zeros_like(loc))
+    assert torch.allclose(scale, (context * valid).abs().sum(1) / valid.sum(1))
 
 
-def test_chronos2_scheme_matches_instance_norm(window):
+def test_arcsinh_scheme_is_invertible_but_not_affine(window):
     context, valid = window
-    from chronos.chronos_bolt import InstanceNorm
+    scheme = norm.ArcsinhStdScheme(eps=1e-5, use_arcsinh=True)
+    module = norm.SIT(scheme)
+    _, stats = module.transform_input(context, valid)
 
-    masked = torch.where(valid.bool(), context, torch.nan)
-    for use_arcsinh in (True, False):
-        instance_norm = InstanceNorm(eps=1e-5, use_arcsinh=use_arcsinh)
-        expected, (loc, scale) = instance_norm(masked)
+    round_tripped = stats.inverse(stats.forward(context))
+    assert torch.allclose(round_tripped, context, rtol=1e-4, atol=1e-2)
 
-        scheme = norm.Chronos2Scheme(eps=1e-5, use_arcsinh=use_arcsinh)
-        stats_loc, stats_scale = scheme.statistics(context, valid)
-        assert torch.equal(stats_loc, loc.squeeze(-1))
-        assert torch.equal(stats_scale, scale.squeeze(-1))
-
-        stats = norm.TransformStats(stats_loc, stats_scale, stats_scale <= 1e-5, scheme)
-        # equal_nan because masked positions stay NaN through the transform.
-        torch.testing.assert_close(
-            stats.forward(masked), expected, rtol=0, atol=0, equal_nan=True
-        )
-        # arcsinh is not affine but it is invertible.
-        round_tripped = stats.inverse(stats.forward(context))
-        assert torch.allclose(round_tripped, context, rtol=1e-4, atol=1e-2)
-
-
-def test_moirai2_std_scheme_matches_packed_std_scaler(window):
-    context, valid = window
-    from src.models.vendor.moirai2.packed_scaler import PackedStdScaler
-
-    batch, length = context.shape
-    patch_size = 16
-    patched = context.view(batch, -1, patch_size)
-    observed = valid.view(batch, -1, patch_size).bool()
-    num_patches = length // patch_size
-    sample_id = torch.ones(batch, num_patches, dtype=torch.long)
-    variate_id = torch.zeros(batch, num_patches, dtype=torch.long)
-
-    scaler = PackedStdScaler(correction=1, minimum_scale=1e-5)
-    loc, scale = scaler(patched, observed, sample_id, variate_id)
-
-    scheme = norm.Moirai2StdScheme(correction=1, minimum_scale=1e-5)
-    stats_loc, stats_scale = scheme.statistics(context, valid)
-
-    assert torch.allclose(stats_loc, loc[:, 0, 0], atol=0, rtol=0)
-    assert torch.allclose(stats_scale, scale[:, 0, 0], atol=0, rtol=0)
-
-
-def test_moirai2_absmean_scheme_matches_packed_abs_mean_scaler(window):
-    context, valid = window
-    from src.models.vendor.moirai2.packed_scaler import PackedAbsMeanScaler
-
-    batch, length = context.shape
-    patch_size = 16
-    patched = context.view(batch, -1, patch_size)
-    observed = valid.view(batch, -1, patch_size).bool()
-    num_patches = length // patch_size
-    sample_id = torch.ones(batch, num_patches, dtype=torch.long)
-    variate_id = torch.zeros(batch, num_patches, dtype=torch.long)
-
-    scaler = PackedAbsMeanScaler()
-    loc, scale = scaler(patched, observed, sample_id, variate_id)
-
-    scheme = norm.Moirai2AbsMeanScheme()
-    stats_loc, stats_scale = scheme.statistics(context, valid)
-
-    assert torch.allclose(stats_loc, loc[:, 0, 0], atol=0, rtol=0)
-    assert torch.allclose(stats_scale, scale[:, 0, 0], atol=0, rtol=0)
-
-
-def test_timesfm_first_patch_scheme_matches_forward_transform(window):
-    context, valid = window
-    from src.models.timesfm import CONFIG_17M, build_timesfm_model
-
-    model = build_timesfm_model(CONFIG_17M, seed=0)
-    padding = 1.0 - valid
-    _, _, stats_reference, _ = model._preprocess_input(
-        input_ts=context, input_padding=padding
-    )
-    mu, sigma = stats_reference
-
-    scheme = norm.TimesFMScheme(
-        mode="first_patch",
-        patch_len=CONFIG_17M.patch_len,
-        tolerance=CONFIG_17M.tolerance,
-        pad_val=CONFIG_17M.pad_val,
-    )
-    loc, scale = scheme.statistics(context, valid)
-
-    assert torch.equal(loc, mu)
-    assert torch.equal(scale, sigma)
-
-
-def test_timesfm_whole_context_scheme_matches_repo_preprocessing(window):
-    context, valid = window
-    import numpy as np
-
-    from src.models.timesfm import CONFIG_17M, TimesFMBatch, build_timesfm_model
-
-    model = build_timesfm_model(CONFIG_17M, seed=0)
-    batch = TimesFMBatch(
-        context=context,
-        context_padding=1.0 - valid,
-        target=torch.zeros(context.shape[0], CONFIG_17M.horizon_len),
-        target_valid=torch.ones(context.shape[0], CONFIG_17M.horizon_len),
-        freq=torch.zeros(context.shape[0], 1, dtype=torch.long),
-        dataset=np.array(["d"] * context.shape[0]),
-        domain=np.array(["x"] * context.shape[0]),
-        frequency=np.array(["H"] * context.shape[0]),
-        scale=torch.ones(context.shape[0]),
-    )
-    from src.models.timesfm import _preprocess_whole_context
-
-    _, _, (mu, sigma) = _preprocess_whole_context(model, batch)
-
-    scheme = norm.TimesFMScheme(
-        mode="whole_context",
-        patch_len=CONFIG_17M.patch_len,
-        tolerance=CONFIG_17M.tolerance,
-        pad_val=CONFIG_17M.pad_val,
-    )
-    loc, scale = scheme.statistics(context, valid)
-
-    assert torch.equal(loc, mu)
-    assert torch.equal(scale, sigma)
+    # Affine would make the difference of two forwards independent of offset.
+    a, b = context[:, :1], context[:, 1:2]
+    spread = stats.forward(a) - stats.forward(b)
+    shifted = stats.forward(a + 50.0) - stats.forward(b + 50.0)
+    assert not torch.allclose(spread, shifted, rtol=1e-3, atol=1e-3)
 
 
 def test_sit_and_revin_align_into_opposite_spaces(window):
@@ -198,7 +92,7 @@ def test_sit_and_revin_align_into_opposite_spaces(window):
     assert torch.equal(revin_target, target)
     assert torch.equal(revin_output, stats.inverse(output))
 
-    # The two arms are the same forward pass read in two spaces.
+    # The two conditions are the same forward pass read in two spaces.
     assert torch.allclose(stats.inverse(sit_target), target, atol=1e-2)
 
 
@@ -268,6 +162,33 @@ def test_degenerate_windows_are_flagged(window):
     assert not bool(stats.degenerate[1])
 
 
-def test_build_scheme_rejects_unknown_names():
-    with pytest.raises(ValueError, match="unknown scheme"):
-        norm.build_scheme("not_a_scheme")
+class _ToyNormalization(norm.BackboneNormalization):
+    """The whole contract a new baseline has to satisfy."""
+
+    normalized_condition = "toy_normalized"
+    original_condition = "toy_original"
+
+    def __init__(self):
+        super().__init__(norm.StandardScheme())
+        self.disabled = False
+
+    def disable(self, model) -> None:
+        self.disabled = True
+
+
+def test_backbone_normalization_picks_the_module_for_each_condition():
+    backbone = _ToyNormalization()
+
+    assert isinstance(backbone.module("toy_normalized"), norm.SIT)
+    assert isinstance(backbone.module("toy_original"), norm.RevIN)
+    assert backbone.module("toy_normalized").scheme is backbone.scheme
+
+
+def test_backbone_normalization_conditions_need_no_instance():
+    """The training loop validates cfg.condition before it has a model config."""
+    assert _ToyNormalization.conditions() == ("toy_normalized", "toy_original")
+
+
+def test_backbone_normalization_rejects_an_unknown_condition():
+    with pytest.raises(ValueError, match="unknown condition"):
+        _ToyNormalization().module("toy_sideways")

@@ -15,9 +15,51 @@ import torch
 from chronos.chronos2 import Chronos2CoreConfig, Chronos2Model
 
 from src.data.gifteval import window_index as wi
+from src.models import normalization
 
 CHRONOS2_REVISION = "chronos-forecasting==2.3.1"
-CONDITIONS = ("chronos2_normalized", "chronos2_original")
+
+
+class IdentityInstanceNorm(torch.nn.Module):
+    """Stands in for Chronos-2's `InstanceNorm`, including its `inverse`."""
+
+    def __init__(self, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.use_arcsinh = False
+
+    def forward(self, x: torch.Tensor, loc_scale=None):
+        if loc_scale is None:
+            loc = torch.zeros(*x.shape[:-1], 1, dtype=x.dtype, device=x.device)
+            scale = torch.ones(*x.shape[:-1], 1, dtype=x.dtype, device=x.device)
+            loc_scale = (loc, scale)
+        return x, loc_scale
+
+    def inverse(self, x: torch.Tensor, loc_scale) -> torch.Tensor:
+        return x
+
+
+class Chronos2Normalization(normalization.BackboneNormalization):
+    """Chronos-2's `InstanceNorm`, reproduced exactly.
+
+    The arcsinh makes this the one backbone whose normalized and original
+    spaces are related nonlinearly rather than by a per-window constant, so
+    `ArcsinhStdScheme` carries the nonlinearity rather than the adapter.
+    """
+
+    normalized_condition = "chronos2_normalized"
+    original_condition = "chronos2_original"
+
+    def __init__(self, config: "Chronos2Config"):
+        super().__init__(
+            normalization.ArcsinhStdScheme(eps=1e-5, use_arcsinh=config.use_arcsinh)
+        )
+
+    def disable(self, model: Chronos2Model) -> None:
+        model.instance_norm = IdentityInstanceNorm(eps=model.instance_norm.eps)
+
+
+CONDITIONS = Chronos2Normalization.conditions()
 
 
 @dataclass(frozen=True)

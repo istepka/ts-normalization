@@ -1,8 +1,11 @@
+import dataclasses
+
 import numpy as np
 import torch
 
 from src.data.gifteval import window_index as wi
 from src.models import moirai2 as ma
+from src.models import normalization as norm
 
 
 def _tiny_config() -> ma.Moirai2Config:
@@ -186,3 +189,108 @@ def test_training_step_updates_model(tiny_corpus):
     assert metrics["loss"] > 0
     assert not torch.equal(before, after)
     assert isinstance(metrics["dataset"], np.ndarray)
+
+
+def _patched(context, valid, patch_size=16):
+    batch, length = context.shape
+    num_patches = length // patch_size
+    return (
+        context.view(batch, -1, patch_size),
+        valid.view(batch, -1, patch_size).bool(),
+        torch.ones(batch, num_patches, dtype=torch.long),
+        torch.zeros(batch, num_patches, dtype=torch.long),
+    )
+
+
+def test_scheme_reproduces_the_packed_std_scaler():
+    """`FlooredStdScheme` must equal uni2ts's PackedStdScaler exactly."""
+    from src.models.vendor.moirai2.packed_scaler import PackedStdScaler
+
+    torch.manual_seed(0)
+    context = torch.randn(8, 128, dtype=torch.float32) * 100.0 + 5.0
+    valid = torch.ones(8, 128, dtype=torch.float32)
+    valid[0, :40] = 0.0
+    valid[3, 100:] = 0.0
+
+    loc, scale = PackedStdScaler(correction=1, minimum_scale=1e-5)(
+        *_patched(context, valid)
+    )
+    scheme = norm.FlooredStdScheme(correction=1, minimum_scale=1e-5)
+    stats_loc, stats_scale = scheme.statistics(context, valid)
+
+    assert torch.allclose(stats_loc, loc[:, 0, 0], atol=0, rtol=0)
+    assert torch.allclose(stats_scale, scale[:, 0, 0], atol=0, rtol=0)
+
+
+def test_abs_mean_scheme_reproduces_the_packed_abs_mean_scaler():
+    from src.models.vendor.moirai2.packed_scaler import PackedAbsMeanScaler
+
+    torch.manual_seed(0)
+    context = torch.randn(8, 128, dtype=torch.float32) * 100.0 + 5.0
+    valid = torch.ones(8, 128, dtype=torch.float32)
+    valid[0, :40] = 0.0
+
+    loc, scale = PackedAbsMeanScaler()(*_patched(context, valid))
+    stats_loc, stats_scale = norm.AbsMeanScheme().statistics(context, valid)
+
+    assert torch.allclose(stats_loc, loc[:, 0, 0], atol=0, rtol=0)
+    assert torch.allclose(stats_scale, scale[:, 0, 0], atol=0, rtol=0)
+
+
+def test_disabled_backbone_reproduces_the_original_bit_identically(tiny_corpus):
+    """Normalizing outside the backbone must move no training numerics."""
+    config = _tiny_config()
+    index, cache = _tiny_index(tiny_corpus)
+    rows = index.split("train").sample(n=4, random_state=0)
+    batch = ma.make_batch(index, rows, cache, config)
+
+    reference = ma.build_moirai2_model(config, seed=0)
+    reference.eval()
+    with torch.no_grad():
+        preds_reference, target_reference, loc, scale = ma.run_model(
+            reference, batch, config
+        )
+
+    external = ma.build_moirai2_model(config, seed=0)
+    backbone = ma.Moirai2Normalization(minimum_scale=reference.scaler.minimum_scale)
+    backbone.disable(external)
+    external.eval()
+
+    module = backbone.module("moirai2_normalized")
+    batch_size = batch.target.shape[0]
+    context_patches = config.context_token_length
+    context = batch.target[:, :context_patches].reshape(batch_size, -1)
+    context_valid = batch.observed_mask[:, :context_patches].reshape(batch_size, -1)
+    _, stats = module.transform_input(context, context_valid.float())
+
+    assert torch.equal(stats.loc, loc)
+    assert torch.equal(stats.scale, scale)
+
+    sequence = batch.target.reshape(batch_size, -1)
+    normalized_sequence = stats.forward(sequence).view_as(batch.target)
+    with torch.no_grad():
+        preds_external, target_external, _, _ = ma.run_model(
+            external, dataclasses.replace(batch, target=normalized_sequence), config
+        )
+
+    assert torch.equal(preds_reference, preds_external)
+    assert torch.equal(target_reference, target_external)
+
+
+def test_disable_keeps_the_degenerate_floor():
+    """The adapter derives its degenerate floor from the scaler's own value."""
+    config = _tiny_config()
+    model = ma.build_moirai2_model(config, seed=0)
+    minimum_scale = model.scaler.minimum_scale
+    ma.Moirai2Normalization(minimum_scale=minimum_scale).disable(model)
+
+    assert model.scaler.minimum_scale == minimum_scale
+    target = torch.randn(2, 6, 16)
+    loc, scale = model.scaler(
+        target,
+        torch.ones_like(target, dtype=torch.bool),
+        torch.ones(2, 6, dtype=torch.long),
+        torch.zeros(2, 6, dtype=torch.long),
+    )
+    assert torch.equal(loc, torch.zeros_like(loc))
+    assert torch.equal(scale, torch.ones_like(scale))

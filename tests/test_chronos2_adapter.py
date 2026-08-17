@@ -1,8 +1,11 @@
+import dataclasses
+
 import numpy as np
 import torch
 
 from src.data.gifteval import window_index as wi
 from src.models import chronos2 as ca
+from src.models import normalization as norm
 
 
 def _tiny_config() -> ca.Chronos2Config:
@@ -131,3 +134,70 @@ def test_training_step_updates_model(tiny_corpus):
     after = model.output_patch_embedding.output_layer.weight.detach()
     assert metrics["loss"] > 0
     assert not torch.equal(before, after)
+
+
+def test_scheme_reproduces_the_official_instance_norm():
+    """`ArcsinhStdScheme` must equal Chronos-2's own InstanceNorm exactly."""
+    from chronos.chronos_bolt import InstanceNorm
+
+    torch.manual_seed(0)
+    context = torch.randn(8, 128, dtype=torch.float32) * 100.0 + 5.0
+    valid = torch.ones(8, 128, dtype=torch.float32)
+    valid[0, :40] = 0.0
+    valid[3, 100:] = 0.0
+    masked = torch.where(valid.bool(), context, torch.nan)
+
+    for use_arcsinh in (True, False):
+        instance_norm = InstanceNorm(eps=1e-5, use_arcsinh=use_arcsinh)
+        expected, (loc, scale) = instance_norm(masked)
+
+        scheme = norm.ArcsinhStdScheme(eps=1e-5, use_arcsinh=use_arcsinh)
+        stats_loc, stats_scale = scheme.statistics(context, valid)
+        assert torch.equal(stats_loc, loc.squeeze(-1))
+        assert torch.equal(stats_scale, scale.squeeze(-1))
+
+        stats = norm.TransformStats(stats_loc, stats_scale, stats_scale <= 1e-5, scheme)
+        # equal_nan because masked positions stay NaN through the transform.
+        torch.testing.assert_close(
+            stats.forward(masked), expected, rtol=0, atol=0, equal_nan=True
+        )
+
+
+def test_disabled_backbone_reproduces_the_original_bit_identically(tiny_corpus):
+    """Normalizing outside the backbone must move no training numerics."""
+    config = _tiny_config()
+    index, cache = _tiny_index(tiny_corpus)
+    rows = index.split("train").sample(n=4, random_state=0)
+    batch = ca.make_batch(index, rows, cache)
+
+    reference = ca.build_chronos2_model(config, seed=0)
+    reference.eval()
+    with torch.no_grad():
+        normalized_reference, original_reference, _ = ca.run_model(reference, batch)
+
+    external = ca.build_chronos2_model(config, seed=0)
+    backbone = ca.Chronos2Normalization(config)
+    backbone.disable(external)
+    external.eval()
+
+    module = backbone.module("chronos2_normalized")
+    z_context, stats = module.transform_input(batch.context, batch.context_valid)
+    with torch.no_grad():
+        normalized_external, _, _ = ca.run_model(
+            external, dataclasses.replace(batch, context=z_context)
+        )
+
+    assert torch.equal(normalized_reference, normalized_external)
+    # RevIN reads the same forward pass in the original space.
+    assert torch.equal(stats.inverse(normalized_external), original_reference)
+
+
+def test_identity_instance_norm_is_the_identity():
+    x = torch.randn(4, 1, 32) * 50.0
+    instance_norm = ca.IdentityInstanceNorm()
+
+    normalized, (loc, scale) = instance_norm(x)
+    assert torch.equal(normalized, x)
+    assert torch.equal(loc, torch.zeros_like(loc))
+    assert torch.equal(scale, torch.ones_like(scale))
+    assert torch.equal(instance_norm.inverse(x, (loc, scale)), x)

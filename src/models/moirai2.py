@@ -25,10 +25,37 @@ import pandas as pd
 import torch
 
 from src.data.gifteval import window_index as wi
+from src.models import normalization
 from src.models.vendor.moirai2 import Moirai2Module
 
 MOIRAI2_REVISION = "uni2ts==2.0.0 (vendored, see src/models/vendor/moirai2/REVISION)"
-CONDITIONS = ("moirai2_normalized", "moirai2_original")
+
+
+class Moirai2Normalization(normalization.BackboneNormalization):
+    """uni2ts's `PackedStdScaler`, reproduced exactly.
+
+    `disable` swaps in uni2ts's own `PackedNOPScaler`, which returns loc=0 and
+    scale=1, rather than a stub written here. `minimum_scale` is carried over
+    because the adapter derives its degenerate floor from it.
+    """
+
+    normalized_condition = "moirai2_normalized"
+    original_condition = "moirai2_original"
+
+    def __init__(self, minimum_scale: float = 1e-5):
+        super().__init__(
+            normalization.FlooredStdScheme(correction=1, minimum_scale=minimum_scale)
+        )
+
+    def disable(self, model: Moirai2Module) -> None:
+        from src.models.vendor.moirai2.packed_scaler import PackedNOPScaler
+
+        minimum_scale = model.scaler.minimum_scale
+        model.scaler = PackedNOPScaler()
+        model.scaler.minimum_scale = minimum_scale
+
+
+CONDITIONS = Moirai2Normalization.conditions()
 
 
 @dataclass(frozen=True)
