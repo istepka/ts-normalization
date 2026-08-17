@@ -18,7 +18,6 @@ sum-over-quantiles convention.
 
 import numpy as np
 
-from src.data import seasonality
 from src.metrics.eval_losses import quantile_loss
 
 # A context whose spread sits at or below this has no usable scale, so the
@@ -86,15 +85,19 @@ def per_series_metrics(
     history: np.ndarray,
     history_mask: np.ndarray,
     quantiles: list[float],
-    freqs: list[str],
+    periods: np.ndarray,
 ) -> dict[str, np.ndarray]:
     """Every accuracy metric, per series.
 
     `forecasts`: [N, H, Q] quantile forecasts, quantile axis last, and
     `quantiles` must contain 0.5 since the point metrics use the median.
     `targets`/`target_mask`: [N, H]. `history`/`history_mask`: [N, L],
-    left-padded. `freqs`: pandas frequency string per series, used for the
-    MASE seasonal period.
+    left-padded. `periods`: [N] MASE seasonal lag per series.
+
+    The seasonal period is supplied rather than derived from a frequency
+    string because it is part of the suite's protocol, and not every suite
+    has a frequency to derive it from. M3 Other carries neither a frequency
+    nor a start timestamp, so its period is declared as 1 by the loader.
 
     Returns arrays of shape [N]. NaN marks a series the metric is undefined
     for (constant context for nMSE, constant history for MASE, zero actuals
@@ -105,8 +108,8 @@ def per_series_metrics(
         raise ValueError(
             f"forecasts {forecasts.shape} and targets {targets.shape} disagree"
         )
-    if len(freqs) != targets.shape[0]:
-        raise ValueError(f"{len(freqs)} freqs for {targets.shape[0]} series")
+    if len(periods) != targets.shape[0]:
+        raise ValueError(f"{len(periods)} periods for {targets.shape[0]} series")
 
     median = forecasts[..., quantiles.index(0.5)]
     counts = np.maximum(target_mask.sum(axis=1), 1)
@@ -116,8 +119,7 @@ def per_series_metrics(
     mse = (error**2).sum(axis=1) / counts
 
     _, sigma = context_scale(history, history_mask)
-    periods = np.array([seasonality.seasonal_period(f) for f in freqs])
-    naive = seasonal_naive_mae(history, history_mask, periods)
+    naive = seasonal_naive_mae(history, history_mask, np.asarray(periods))
 
     # MAPE is undefined at zero actuals. Favorita fills 20.5% of points to
     # zero by Kaggle's convention, so those positions are excluded per series

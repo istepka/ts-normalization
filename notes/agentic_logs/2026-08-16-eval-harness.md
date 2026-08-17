@@ -90,8 +90,9 @@ those three files already share. `predict.py` holds only the
       scores MASE 1.046 mean / 0.988 median, and a one-step-misaligned
       horizon scores 97.5, so the baseline check is a sharp detector of
       horizon misalignment rather than a marginal one.
-- [ ] 4. `src/eval/suites.py`: six loaders to a uniform record. Verify the
-      series counts 1001 / 3003 / 1311 / 100000 / 83207 and 28 configs.
+- [x] 4. `src/eval/suites.py`: six loaders to a uniform `EvalSeries`, plus
+      `load_suite` and `src/scripts/verify_eval_suites.py`. All counts
+      confirmed against the real sources, see the table below.
 - [ ] 5. `src/eval/protocol.py`: `Forecaster` protocol and registry.
 - [ ] 6. TimesFM `build_forecaster`. Verify on M3 native, 3003 forecasts.
 - [ ] 7. `src/eval/score.py` + seasonal-naive baseline. Verify baseline
@@ -103,6 +104,58 @@ those three files already share. `predict.py` holds only the
 - [ ] 10. GIFT-Eval short native path. Verify a published baseline lands
       near its leaderboard number.
 - [ ] 11. `src/scripts/run_tsfm_eval.py` + `conf/eval.yaml`.
+
+## Loaded suites
+
+`uv run python -m src.scripts.verify_eval_suites`, all counts matching the
+canonical definitions:
+
+| suite | series | subsets | horizons | history median | under 512 |
+|---|---|---|---|---|---|
+| m1 | 1,001 | 3 | 6/8/18 | 53 | 1,001 (100%) |
+| m3 | 3,003 | 4 | 6/8/18 | 51 | 3,003 (100%) |
+| tourism | 1,311 | 3 | 4/8/24 | 102 | 1,311 (100%) |
+| m4 | 100,000 | 6 | 6..48 | 97 | 95,103 (95.1%) |
+| gifteval | 319,209 | 55 | 6..60 | 665 | 102,854 (32.2%) |
+| favorita | 83,207 | 1 | 16 | 1,339 | 6,956 (8.4%) |
+
+The last column is the retrospective justification for dropping the
+512-context eligibility rule. Under that rule M1, M3, and Tourism would be
+**empty**, and M4 would lose 95% of its series. The rule was a training
+constraint read into an evaluation definition, and applying it would not
+have produced a worse number so much as no number at all.
+
+Maximum horizon anywhere is 60, against a native model horizon of 128, which
+is what makes the no-rollout claim hold.
+
+GIFT-Eval counts instances rather than series, being series times rolling
+windows. Its `m4_yearly` holds 22,974 against the official 23,000, which is
+the documented GIFT-Eval preprocessing drop and the reason the standalone M4
+suite reads the official CSVs instead.
+
+### GIFT-Eval short configs
+
+The benchmark's own `SHORT_DATASETS` list, 55 configs, transcribed into
+`GIFTEVAL_SHORT_CONFIGS` and re-derived from the checkout's notebooks by
+test. Directory scanning is wrong here: the checkout also carries
+`synthetic/*`, which is outside the benchmark, and `jena_weather` exists both
+as a leaf and as frequency subdirectories.
+
+The split is reimplemented from gift-eval's `data.py` (prediction-length
+maps, window count, non-overlapping windows from the end, multivariate
+flattening) rather than imported, because importing it would pull in gluonts
+and the gift_eval package, neither of which is installed. Exact leaderboard
+parity would want their evaluator instead, which is the open question under
+item 10.
+
+### Seasonality is per suite, not per frequency
+
+M4 scores on its own competition seasonality (Daily 1, Weekly 1, Hourly 24)
+so the standalone suite stays comparable to the M4 literature, while
+GIFT-Eval's `m4_daily` uses the gluonts convention (Daily 7). M3 Other
+carries neither a frequency nor a start timestamp in its `.tsf` and declares
+period 1. So `EvalSeries` carries an explicit `period` and
+`accuracy.per_series_metrics` takes periods rather than frequency strings.
 
 ## EV window ordering
 

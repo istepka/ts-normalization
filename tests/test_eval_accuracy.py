@@ -34,7 +34,7 @@ def test_perfect_forecast_scores_zero_everywhere():
         history,
         np.ones_like(history),
         QUANTILES,
-        ["D"],
+        np.array([7]),
     )
     for name in ("mae", "mse", "nmse", "mase", "mape", "smape", "crps", "wql"):
         assert out[name][0] == pytest.approx(0.0), name
@@ -59,7 +59,7 @@ def test_seasonal_naive_forecast_scores_mase_near_one():
         history,
         np.ones_like(history),
         QUANTILES,
-        ["D"] * 16,
+        np.full(16, 7),
     )
     assert np.nanmean(out["mase"]) == pytest.approx(1.0, rel=0.15)
 
@@ -82,7 +82,7 @@ def test_misaligned_horizon_blows_up_mase():
             history,
             np.ones_like(history),
             QUANTILES,
-            ["D"] * 16,
+            np.full(16, 7),
         )
         return np.nanmean(out["mase"])
 
@@ -109,7 +109,7 @@ def test_ragged_history_is_honored_via_mask():
         short,
         np.ones_like(short),
         QUANTILES,
-        ["D"],
+        np.array([7]),
     )
     padded = accuracy.per_series_metrics(
         forecast,
@@ -118,7 +118,7 @@ def test_ragged_history_is_honored_via_mask():
         padded_hist,
         padded_mask,
         QUANTILES,
-        ["D"],
+        np.array([7]),
     )
     for name in ("nmse", "mase"):
         assert padded[name][0] == pytest.approx(tight[name][0]), name
@@ -136,7 +136,7 @@ def test_constant_context_yields_nan_rather_than_a_huge_nmse():
         history,
         np.ones_like(history),
         QUANTILES,
-        ["D"],
+        np.array([7]),
     )
     assert np.isnan(out["nmse"][0])
     assert np.isnan(out["mase"][0])
@@ -155,7 +155,7 @@ def test_mape_reports_coverage_when_actuals_are_zero():
         history,
         np.ones_like(history),
         QUANTILES,
-        ["D"],
+        np.array([7]),
     )
     assert out["mape_coverage"][0] == pytest.approx(0.25)
     assert out["mape"][0] == pytest.approx(50.0)
@@ -167,7 +167,7 @@ def test_nmse_and_mase_are_scale_free_but_mae_is_not():
     history = rng.normal(loc=10.0, scale=2.0, size=(5, 40))
     targets = rng.normal(loc=10.0, scale=2.0, size=(5, 6))
     forecast = _quantile_stack(targets + rng.normal(scale=0.5, size=targets.shape))
-    args = (np.ones((5, 6)), history, np.ones_like(history), QUANTILES, ["D"] * 5)
+    args = (np.ones((5, 6)), history, np.ones_like(history), QUANTILES, np.full(5, 7))
 
     base = accuracy.per_series_metrics(forecast, targets, *args)
     scaled = accuracy.per_series_metrics(
@@ -177,7 +177,7 @@ def test_nmse_and_mase_are_scale_free_but_mae_is_not():
         history * 50.0,
         np.ones_like(history),
         QUANTILES,
-        ["D"] * 5,
+        np.full(5, 7),
     )
     assert np.allclose(base["nmse"], scaled["nmse"])
     assert np.allclose(base["mase"], scaled["mase"])
