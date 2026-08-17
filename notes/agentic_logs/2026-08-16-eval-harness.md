@@ -167,8 +167,10 @@ period 1. So `EvalSeries` carries an explicit `period` and
 seasonal-naive rule through our loaders, seasonality, and MASE and compares
 against the benchmark's own `results/seasonal_naive/all_results.csv`.
 
-**All 55 configs, median ratio 1.0000, 51 within 1%, 55 within 5%.** Most
-agree to four decimal places. This is what makes the reimplemented split
+**All 55 configs match on MASE, MAE, and WQL, every median ratio 1.0000.**
+Within 1%: MASE 51/55, MAE 53/55, WQL 49/55. Most agree to four decimals.
+WQL is checked against their ND column, since a median-only forecast's WQL
+is ND by definition while their WQL column covers a 9-quantile distribution. This is what makes the reimplemented split
 trustworthy without importing gluonts, and it is the thing to re-run after
 touching the split, the seasonality, or the MASE denominator.
 
@@ -176,7 +178,7 @@ The four configs outside 1% (`bitbrains_fast_storage/5T` 0.969 and `/H`
 1.047, `hierarchical_sales/D` 1.022, `kdd_cup_2018/H` 1.010) are all
 datasets carrying missing values, so the residual gap is NaN handling.
 
-Getting there surfaced two real bugs, both of which produced plausible
+Getting there surfaced three real bugs, all of which produced plausible
 numbers rather than obvious failures.
 
 ### MASE denominator was bounded by the model context
@@ -187,6 +189,19 @@ what the model saw, but MASE's denominator is a property of the series. The
 truncation moved MASE by up to 2x on long series (`ett2/D` 0.512 of
 published, `m4_daily` 0.443). Fixed by `accuracy.ragged_seasonal_naive_mae`
 over full unpadded histories, passed in via `score(forecasts, series)`.
+
+### WQL was pooled as a mean of ratios
+
+`pool` averaged the per-series `wql` column, but WQL and ND are globally
+normalized, a ratio of sums. The two coincide only when every series shares a
+denominator. Against GIFT-Eval's published ND, which a median-only forecast's
+WQL equals by definition, ours came out 1.1647. Fixed by carrying
+`wql_num` / `wql_den` out of `per_series_metrics` and having `pool` aggregate
+any `_num`/`_den` pair as a ratio, which takes WQL to 1.0000.
+
+Worth noting the per-suite consequence: pooled WQL is now dominated by the
+large-magnitude series in a suite, which is what the definition intends but
+is not what a per-series mean would have said.
 
 ### GIFT-Eval seasonality is not this repo's seasonality
 
