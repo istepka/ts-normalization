@@ -96,11 +96,10 @@ GIFTEVAL_SHORT_CONFIGS = (
 )
 EXPECTED_GIFTEVAL_CONFIGS = 55
 
-# M4 scores against its own competition seasonality, not the gluonts
-# convention, so the standalone M4 suite stays comparable to the M4
-# literature. GIFT-Eval's m4_* configs deliberately use the gluonts
-# convention instead (daily -> 7), which is why the period travels with the
-# suite rather than being derived from the frequency string.
+# M4 scores against its own competition seasonality so the standalone suite
+# stays comparable to the M4 literature. It happens to agree with gluonts on
+# all six subsets, but it is stated here rather than derived because that is
+# a coincidence of the two conventions, not a guarantee.
 M4_SPEC = {
     "Yearly": {"horizon": 6, "period": 1, "freq": "Y"},
     "Quarterly": {"horizon": 8, "period": 4, "freq": "Q"},
@@ -134,6 +133,9 @@ GIFTEVAL_TEST_SPLIT = 0.1
 GIFTEVAL_MAX_WINDOW = 20
 
 FAVORITA_HORIZON = 16
+# Daily retail with a strong weekly cycle. This is our own choice, Favorita
+# having no canonical protocol; gluonts would use no cycle at all for daily.
+FAVORITA_PERIOD = 7
 FAVORITA_END = pd.Timestamp("2017-08-15")
 
 
@@ -296,7 +298,7 @@ def load_favorita(corpus_root: Path) -> list[EvalSeries]:
                     item_id=item_id,
                     history=values[:-FAVORITA_HORIZON],
                     actual=values[-FAVORITA_HORIZON:],
-                    period=7,
+                    period=FAVORITA_PERIOD,
                     freq="D",
                 )
             )
@@ -409,12 +411,48 @@ def load_suite(name: str, roots: dict[str, str]) -> list[EvalSeries]:
 SUITES = ("m1", "m3", "tourism", "m4", "gifteval", "favorita")
 
 
+# gluonts.time_feature.seasonality.DEFAULT_SEASONALITIES, which is what
+# GIFT-Eval's evaluator uses. Deliberately NOT src/data/seasonality.py: that
+# module maps daily to the weekly cycle (7) for the training corpus, whereas
+# gluonts uses 1, and it maps seconds to the daily cycle where gluonts uses
+# the hourly one. Scoring GIFT-Eval on the corpus convention put our
+# seasonal-naive MASE 1.5x to 5x away from the benchmark's published numbers
+# on every daily and 10-second config.
+GLUONTS_SEASONALITIES = {
+    "S": 3600,
+    "T": 1440,
+    "H": 24,
+    "D": 1,
+    "W": 1,
+    "M": 12,
+    "B": 5,
+    "Q": 4,
+    "A": 1,
+    "Y": 1,
+}
+
+
 def _gluonts_seasonality(freq: str) -> int:
     """GIFT-Eval scores on the gluonts seasonality convention, so this is
-    deliberately separate from the M4 competition periods above."""
-    from src.data import seasonality
+    deliberately separate from the M4 competition periods above.
 
-    return seasonality.seasonal_period(freq)
+    Mirrors `gluonts.time_feature.get_seasonality`: divide the base
+    seasonality by the frequency's multiplier, falling back to 1 when it does
+    not divide evenly.
+    """
+    base = GLUONTS_SEASONALITIES.get(base_freq_code(freq), 1)
+    multiplier = _freq_multiplier(freq)
+    seasonality, remainder = divmod(base, multiplier)
+    return seasonality if remainder == 0 else 1
+
+
+def _freq_multiplier(freq: str) -> int:
+    digits = ""
+    for char in freq.partition("-")[0]:
+        if not char.isdigit():
+            break
+        digits += char
+    return int(digits) if digits else 1
 
 
 def _check_count(suite: str, found: int) -> None:

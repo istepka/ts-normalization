@@ -78,6 +78,36 @@ def seasonal_naive_mae(
     return np.where(mae > SIGMA_FLOOR, mae, np.nan)
 
 
+def ragged_seasonal_naive_mae(
+    histories: list[np.ndarray], periods: np.ndarray
+) -> np.ndarray:
+    """MASE denominators over full, unpadded histories.
+
+    The padded variant above is bounded by the model's context. This one is
+    not, which matters because GIFT-Eval's `bizitobs_*` configs carry a
+    seasonal period of 8,640 against a 512-point context, and because the
+    in-sample seasonal error of a long series is not the seasonal error of
+    its last 512 points.
+    """
+    out = np.empty(len(histories))
+    for i, history in enumerate(histories):
+        observed = np.isfinite(history)
+        count = int(observed.sum())
+        lag = int(periods[i]) if int(periods[i]) < count else 1
+        lag = max(lag, 1)
+        if count <= lag:
+            out[i] = np.nan
+            continue
+        current, lagged = history[lag:], history[:-lag]
+        pair = np.isfinite(current) & np.isfinite(lagged)
+        if not pair.any():
+            out[i] = np.nan
+            continue
+        mae = float(np.abs(current[pair] - lagged[pair]).mean())
+        out[i] = mae if mae > SIGMA_FLOOR else np.nan
+    return out
+
+
 def per_series_metrics(
     forecasts: np.ndarray,
     targets: np.ndarray,
@@ -86,6 +116,7 @@ def per_series_metrics(
     history_mask: np.ndarray,
     quantiles: list[float],
     periods: np.ndarray,
+    naive_mae: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Every accuracy metric, per series.
 
@@ -119,7 +150,16 @@ def per_series_metrics(
     mse = (error**2).sum(axis=1) / counts
 
     _, sigma = context_scale(history, history_mask)
-    naive = seasonal_naive_mae(history, history_mask, np.asarray(periods))
+    # MASE's denominator is a property of the series, not of the model's
+    # window, so callers pass it in computed over the full history. Falling
+    # back to the padded context here silently truncates it, which shifted
+    # MASE by up to 2x against GIFT-Eval's published seasonal-naive numbers
+    # on long series and on periods larger than the context.
+    naive = (
+        np.asarray(naive_mae)
+        if naive_mae is not None
+        else seasonal_naive_mae(history, history_mask, np.asarray(periods))
+    )
 
     # MAPE is undefined at zero actuals. Favorita fills 20.5% of points to
     # zero by Kaggle's convention, so those positions are excluded per series

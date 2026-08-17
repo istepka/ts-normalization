@@ -1,0 +1,73 @@
+defaults:
+  - _self_
+
+model: timesfm
+checkpoint: ???
+device: cuda
+seed: 0
+output_dir: outputs/eval
+batch_size: 256
+
+# native is the headline. fixed reproduces the training window shape as a
+# cross-check and yields nothing at all on M1/M3/Tourism, whose every series
+# is shorter than context + horizon. rolling exists only because the
+# stability metrics need overlapping windows, which no suite protocol gives.
+modes: [native, fixed, rolling]
+suites: [m1, m3, tourism, m4, gifteval, favorita]
+
+roots:
+  monash: /zfsauton/scratch/istepka/lts/data/monash_eval
+  m4: /zfsauton/scratch/istepka/lts/data/m4_official
+  gifteval: /zfsauton/scratch/istepka/lts/data/gift-eval
+  corpus: /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full
+
+rolling:
+  # stride must be below horizon or the windows do not overlap and both
+  # stability metrics are undefined.
+  horizon: 32
+  stride: 8
+  n_windows: 6
+  # Rolling re-forecasts every series n_windows times, so it runs on a
+  # capped sample per subset rather than the full suite.
+  max_series_per_subset: 200
+
+# The model skeleton is rebuilt from these to load the checkpoint, so they
+# must match the run that produced it.
+window_index:
+  context_length: 512
+  prediction_length: 128
+
+timesfm:
+  config_size: 70m
+  normalization_mode: first_patch
+  objective: combined
+  grad_clip_norm: 1.0
+
+chronos2:
+  context_length: 512
+  prediction_length: 128
+  patch_size: 16
+  d_model: 512
+  d_kv: 64
+  d_ff: 1024
+  num_layers: 6
+  num_heads: 8
+  dropout_rate: 0.0
+  initializer_factor: 0.05
+  quantiles: [0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99]
+  use_arcsinh: true
+  grad_clip_norm: 1.0
+
+moirai2:
+  context_length: 512
+  predict_horizon: 64
+  patch_size: 16
+  d_model: 384
+  d_ff: 1024
+  num_layers: 6
+  max_seq_len: 576
+  attn_dropout_p: 0.0
+  dropout_p: 0.0
+  scaling: true
+  quantile_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  grad_clip_norm: 1.0

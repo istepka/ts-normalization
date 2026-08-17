@@ -105,38 +105,45 @@ def excess_volatility(
 
     # This harness stacks the window axis oldest-first, so window t was
     # created before t+1. For a fixed target date d the source window is
-    # t = (d - h) / stride, which means ascending h walks BACKWARDS in
-    # creation date: h+1 is the older forecast, h the newer one.
+    # t = (d - h) / stride, so consecutive creation dates sit `stride` apart
+    # in h, and ascending h walks BACKWARDS in creation date: h + stride is
+    # the older forecast, h the newer one.
     #
-    # The pairing therefore has to be read off the window ordering rather
-    # than assumed. Under a newest-first convention the slices swap. Getting
-    # it wrong flips the sign of the accuracy term, which makes EV reward
-    # churn and penalize convergence, and does so quietly: both arms land
-    # near the same inflated value rather than looking obviously broken.
-    older = reshaped_preds[:, :, 1:, :]
-    newer = reshaped_preds[:, :, :-1, :]
+    # Stepping by 1 instead of by stride is only correct when stride == 1.
+    # For any larger stride the intermediate h slots are structurally empty
+    # (t would not be an integer), so every pair mixes a real forecast with a
+    # NaN and the metrics collapse to EV = 0 and sFPC = NaN.
+    #
+    # The direction has to be read off the window ordering rather than
+    # assumed. Under a newest-first convention the slices swap. Getting it
+    # wrong flips the sign of the accuracy term, which makes EV reward churn
+    # and penalize convergence, and does so quietly: both arms land near the
+    # same inflated value rather than looking obviously broken.
+    older = reshaped_preds[:, :, stride:, :]
+    newer = reshaped_preds[:, :, :-stride, :]
 
     # Uncovered (date, h) slots are NaN by construction, and a pair is usable
     # only where both endpoints exist. Deriving validity from the coverage
     # pattern keeps edge dates from contributing zero-filled terms when no
     # caller mask is supplied.
+    n_pairs = horizon - stride
     pair_valid = (np.isfinite(older) & np.isfinite(newer)).astype(float)
-    pair_valid = pair_valid.reshape(batch, n_dates, horizon - 1, channels, n_quantiles)
+    pair_valid = pair_valid.reshape(batch, n_dates, n_pairs, channels, n_quantiles)
     pair_mask = pair_valid[..., 0]
     if reshaped_mask is not None:
         pair_mask = pair_mask * np.logical_and(
-            np.nan_to_num(reshaped_mask[:, :, 1:, :], nan=0.0),
-            np.nan_to_num(reshaped_mask[:, :, :-1, :], nan=0.0),
+            np.nan_to_num(reshaped_mask[:, :, stride:, :], nan=0.0),
+            np.nan_to_num(reshaped_mask[:, :, :-stride, :], nan=0.0),
         ).astype(float)
-    pair_mask = pair_mask * np.isfinite(reshaped_y[:, :, 1:, :]).astype(float)
+    pair_mask = pair_mask * np.isfinite(reshaped_y[:, :, stride:, :]).astype(float)
 
     before = np.nan_to_num(older, nan=0.0).reshape(
-        batch, n_dates, horizon - 1, channels, n_quantiles
+        batch, n_dates, n_pairs, channels, n_quantiles
     )
     update = np.nan_to_num(newer, nan=0.0).reshape(
-        batch, n_dates, horizon - 1, channels, n_quantiles
+        batch, n_dates, n_pairs, channels, n_quantiles
     )
-    reshaped_y = np.nan_to_num(reshaped_y[:, :, 1:, :], nan=0.0)
+    reshaped_y = np.nan_to_num(reshaped_y[:, :, stride:, :], nan=0.0)
 
     mid = quantiles.index(0.5)
     update_median = update[..., mid]
@@ -180,9 +187,11 @@ def forecast_percentage_change(
     horizon = preds.shape[2]
     _check_stride(stride, horizon)
 
+    # Paired stride apart, not 1 apart: see excess_volatility's comment on
+    # why adjacent h slots are structurally empty for stride > 1.
     reshaped = reshape_windows_by_date(preds, stride, mask=mask)
-    before = reshaped[:, :, :-1, :]
-    update = reshaped[:, :, 1:, :]
+    before = reshaped[:, :, stride:, :]
+    update = reshaped[:, :, :-stride, :]
 
     num = np.abs(update - before)
     den = np.abs(update) + np.abs(before) + 1e-8

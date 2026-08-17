@@ -179,3 +179,34 @@ def test_excess_volatility_scaling_is_unit_free():
         targets * 100.0, preds * 100.0, QUANTILES, stride=1
     )
     assert base == pytest.approx(scaled, rel=1e-6)
+
+
+@pytest.mark.parametrize("stride", [1, 4, 8, 16])
+def test_stability_metrics_pair_windows_stride_apart(stride):
+    """For a fixed target date the source window is t = (d - h) / stride, so
+    consecutive creation dates sit `stride` apart in h and the intermediate
+    slots are structurally empty. Pairing adjacent h instead collapses EV to
+    exactly 0 and sFPC to NaN for every stride above 1, which looks like a
+    well-behaved result rather than a broken one."""
+    rng = np.random.default_rng(0)
+    batch, windows, horizon, channels = 4, 6, 32, 1
+    targets = rng.uniform(10.0, 20.0, size=(batch, windows, horizon, channels))
+    window_axis = np.arange(windows)[None, :, None, None]
+    converging = targets + 2.0 * (0.85**window_axis)
+    thrashing = targets + 2.0 * ((-1.0) ** window_axis)
+    mask = np.ones((batch, windows, horizon, channels))
+
+    def to_q(x):
+        return np.repeat(x[..., None], len(QUANTILES), axis=-1)
+
+    ev_converging = stability.excess_volatility(
+        targets, to_q(converging), QUANTILES, stride=stride, mask=mask
+    )
+    ev_thrashing = stability.excess_volatility(
+        targets, to_q(thrashing), QUANTILES, stride=stride, mask=mask
+    )
+    sfpc = stability.forecast_percentage_change(converging, stride=stride, mask=mask)
+
+    assert ev_converging != 0.0
+    assert np.isfinite(sfpc) and sfpc > 0.0
+    assert ev_thrashing > ev_converging

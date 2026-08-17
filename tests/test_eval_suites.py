@@ -112,24 +112,44 @@ def test_base_freq_code_strips_multipliers_and_anchors():
     assert suites.base_freq_code("D") == "D"
 
 
-def test_m4_and_gluonts_seasonality_deliberately_disagree_on_daily():
-    """The standalone M4 suite scores on M4's own competition seasonality so
-    it stays comparable to the M4 literature, while GIFT-Eval's m4_daily uses
-    the gluonts convention. Collapsing the two would silently change one set
-    of numbers."""
-    assert suites.M4_SPEC["Daily"]["period"] == 1
-    assert suites._gluonts_seasonality("D") == 7
+def test_gluonts_seasonality_matches_the_benchmarks_convention():
+    """GIFT-Eval scores through gluonts' DEFAULT_SEASONALITIES, where daily
+    has no cycle and seconds take the hourly one. src/data/seasonality.py
+    maps daily to 7 and seconds to the daily cycle for the training corpus,
+    and using it here put our seasonal-naive MASE 1.5x to 5x off the
+    benchmark's published numbers on every daily and 10-second config."""
+    from src.data import seasonality as corpus_seasonality
+
+    assert suites._gluonts_seasonality("D") == 1
+    assert suites._gluonts_seasonality("10S") == 360
+    assert corpus_seasonality.seasonal_period("D") == 7
+    for freq, expected in [("H", 24), ("5T", 288), ("W-SUN", 1), ("A-DEC", 1)]:
+        assert suites._gluonts_seasonality(freq) == expected, freq
+
+
+def test_seasonal_period_travels_with_the_suite_not_the_frequency():
+    """Two suites can score the same frequency on different periods, so the
+    period is declared per suite rather than derived. M3 Other has no
+    frequency at all to derive one from, and Favorita is our own definition
+    which takes the weekly retail cycle where gluonts would use none."""
+    assert suites.MONASH_PERIODS[None] == 1
+    assert suites.FAVORITA_PERIOD == 7
+    assert suites._gluonts_seasonality("D") == 1
 
 
 def test_every_short_horizon_fits_the_models_native_window():
     """No autoregressive rollout is needed only because GIFT-Eval is
-    restricted to the short term. If a horizon here ever exceeds 128 the
-    predict path needs rollout before the suite can be scored."""
+    restricted to the short term. The binding constraint is Moirai 2.0, whose
+    native horizon is 64 (num_predict_token 4 * patch_size 16), not TimesFM's
+    or Chronos-2's 128. The longest suite horizon is 60, so the margin is 4
+    steps: any new suite, or a Moirai config with fewer predict tokens, needs
+    rechecking here before it can be scored."""
     horizons = set(suites.GIFTEVAL_PRED_LENGTH.values())
     horizons |= set(suites.GIFTEVAL_M4_PRED_LENGTH.values())
     horizons |= {spec["horizon"] for spec in suites.M4_SPEC.values()}
     horizons.add(suites.FAVORITA_HORIZON)
-    assert max(horizons) <= 128
+    assert max(horizons) == 60
+    assert max(horizons) <= 64
 
 
 @pytest.mark.skipif(not GIFTEVAL_ROOT.is_dir(), reason="gift-eval checkout absent")

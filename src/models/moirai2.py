@@ -338,6 +338,88 @@ def training_step_metrics(
     }
 
 
+@dataclass
+class Moirai2Forecaster:
+    """`src.eval.protocol.Forecaster` over a trained Moirai 2.0 checkpoint.
+
+    Moirai's native horizon is `num_predict_token * patch_size`, 64 under the
+    project config, which is the shortest of the three models and therefore
+    the binding constraint on which suites can be scored without rollout.
+    """
+
+    model: Moirai2Module
+    config: Moirai2Config
+    device: str
+    context_length: int
+    horizon: int
+    quantiles: list[float]
+
+    def predict(
+        self, context: np.ndarray, valid: np.ndarray, freqs: list[str]
+    ) -> np.ndarray:
+        if context.shape[1] != self.context_length:
+            raise ValueError(
+                f"context is {context.shape[1]} wide, expected {self.context_length}"
+            )
+        batch_size = context.shape[0]
+        seq_len = self.context_length + self.horizon
+        sequence = np.zeros((batch_size, seq_len), dtype=np.float32)
+        observed = np.zeros((batch_size, seq_len), dtype=bool)
+        sequence[:, : self.context_length] = context
+        observed[:, : self.context_length] = valid > 0
+        # The horizon region stays zero and unobserved: at eval time its
+        # values are what we are predicting, so they must not reach the
+        # scaler, which reads observed_mask & ~prediction_mask.
+
+        num_patches = self.config.num_patches
+        patch = self.config.patch_size
+        context_patches = self.config.context_token_length
+        prediction_mask = torch.zeros(batch_size, num_patches, dtype=torch.bool)
+        prediction_mask[:, context_patches:] = True
+
+        batch = Moirai2Batch(
+            target=torch.from_numpy(sequence).reshape(batch_size, num_patches, patch),
+            observed_mask=torch.from_numpy(observed).reshape(
+                batch_size, num_patches, patch
+            ),
+            sample_id=torch.ones(batch_size, num_patches, dtype=torch.long),
+            time_id=torch.arange(num_patches, dtype=torch.long)
+            .unsqueeze(0)
+            .expand(batch_size, -1)
+            .clone(),
+            variate_id=torch.zeros(batch_size, num_patches, dtype=torch.long),
+            prediction_mask=prediction_mask,
+            dataset=np.empty(batch_size, dtype=object),
+            domain=np.empty(batch_size, dtype=object),
+            frequency=np.asarray(freqs, dtype=object),
+            scale=torch.ones(batch_size),
+        ).to(self.device)
+
+        with torch.no_grad():
+            normalized, _, loc, scale = run_model(self.model, batch, self.config)
+            original = normalized * scale[:, None, None] + loc[:, None, None]
+        # run_model puts the quantile axis in the middle, [B, Q, H].
+        return original.permute(0, 2, 1).float().cpu().numpy()
+
+
+def build_forecaster(cfg, checkpoint_path, device: str) -> Moirai2Forecaster:
+    model_config = Moirai2Config(**OmegaConf.to_container(cfg.moirai2, resolve=True))
+    model = build_moirai2_model(model_config, seed=cfg.seed)
+    state = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(state["model"])
+    model.to(device).eval()
+    return Moirai2Forecaster(
+        model=model,
+        config=model_config,
+        device=device,
+        context_length=model_config.context_length,
+        horizon=model_config.predict_horizon,
+        quantiles=list(model_config.quantile_levels),
+    )
+
+
+from omegaconf import OmegaConf
+
 from src.data import seasonality
 from src.losses import pointwise, quantile
 from src.metrics import forecast

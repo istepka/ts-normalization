@@ -277,6 +277,61 @@ def training_step_metrics(
     }
 
 
+@dataclass
+class Chronos2Forecaster:
+    """`src.eval.protocol.Forecaster` over a trained Chronos-2 checkpoint."""
+
+    model: Chronos2Model
+    device: str
+    context_length: int
+    horizon: int
+    quantiles: list[float]
+
+    def predict(
+        self, context: np.ndarray, valid: np.ndarray, freqs: list[str]
+    ) -> np.ndarray:
+        if context.shape[1] != self.context_length:
+            raise ValueError(
+                f"context is {context.shape[1]} wide, expected {self.context_length}"
+            )
+        # make_batch leaves missing context as NaN alongside the mask, so the
+        # padded positions are restored to NaN rather than passed as zeros.
+        masked = np.where(valid > 0, context, np.nan).astype(np.float32)
+        batch_size = context.shape[0]
+        batch = Chronos2Batch(
+            context=torch.from_numpy(masked),
+            context_valid=torch.from_numpy(valid.astype(np.float32)),
+            target=torch.zeros(batch_size, self.horizon),
+            target_valid=torch.zeros(batch_size, self.horizon),
+            dataset=np.empty(batch_size, dtype=object),
+            domain=np.empty(batch_size, dtype=object),
+            frequency=np.asarray(freqs, dtype=object),
+            scale=torch.ones(batch_size),
+        ).to(self.device)
+
+        with torch.no_grad():
+            _, original, _ = run_model(self.model, batch)
+        # run_model puts the quantile axis in the middle, [B, Q, H].
+        return original.permute(0, 2, 1).float().cpu().numpy()
+
+
+def build_forecaster(cfg, checkpoint_path, device: str) -> Chronos2Forecaster:
+    model_config = Chronos2Config(**OmegaConf.to_container(cfg.chronos2, resolve=True))
+    model = build_chronos2_model(model_config, seed=cfg.seed)
+    state = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(state["model"])
+    model.to(device).eval()
+    return Chronos2Forecaster(
+        model=model,
+        device=device,
+        context_length=model_config.context_length,
+        horizon=model_config.prediction_length,
+        quantiles=list(model_config.quantiles),
+    )
+
+
+from omegaconf import OmegaConf
+
 from src.data import seasonality
 from src.losses import pointwise, quantile
 from src.metrics import forecast

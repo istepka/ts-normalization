@@ -414,6 +414,83 @@ def training_step_metrics(
     }
 
 
+@dataclass
+class TimesFMForecaster:
+    """`src.eval.protocol.Forecaster` over a trained TimesFM checkpoint.
+
+    Scoring reads the quantile heads in original units, which is the space
+    every suite's actuals live in, regardless of which space the run's
+    `condition` optimized. That mirrors how `forward` already computes its
+    eval metrics on fixed definitions so both arms stay comparable.
+    """
+
+    model: PatchedTimeSeriesDecoder
+    device: str
+    normalization_mode: str
+    context_length: int
+    horizon: int
+    quantiles: list[float]
+
+    def predict(
+        self, context: np.ndarray, valid: np.ndarray, freqs: list[str]
+    ) -> np.ndarray:
+        if context.shape[1] != self.context_length:
+            raise ValueError(
+                f"context is {context.shape[1]} wide, expected {self.context_length}"
+            )
+        buckets = np.array([frequency_bucket(f) for f in freqs], dtype=np.int64)
+        batch_size = context.shape[0]
+        # run_decoder reads only the tensor fields; the numpy columns exist
+        # for the training path's per-source breakdowns and are unused here.
+        batch = TimesFMBatch(
+            context=torch.from_numpy(context.astype(np.float32)),
+            context_padding=torch.from_numpy((1.0 - valid).astype(np.float32)),
+            target=torch.zeros(batch_size, self.horizon),
+            target_valid=torch.zeros(batch_size, self.horizon),
+            freq=torch.from_numpy(buckets).unsqueeze(1),
+            dataset=np.empty(batch_size, dtype=object),
+            domain=np.empty(batch_size, dtype=object),
+            frequency=np.asarray(freqs, dtype=object),
+            scale=torch.ones(batch_size),
+        ).to(self.device)
+
+        with torch.no_grad():
+            _, original_out, _ = run_decoder(self.model, batch, self.normalization_mode)
+        # Column 0 is the point head, the rest are the quantile heads.
+        return original_out[..., 1:].float().cpu().numpy()
+
+
+def build_forecaster(cfg, checkpoint_path, device: str) -> TimesFMForecaster:
+    """Loads a trained TimesFM checkpoint for evaluation.
+
+    The eval context length comes from the run's own
+    `window_index.context_length` so the model sees the shape it trained on.
+    """
+    from src.training.tsfm import TIMESFM_CONFIGS
+
+    model_config = TIMESFM_CONFIGS[cfg.timesfm.config_size]
+    model = build_timesfm_model(model_config, seed=cfg.seed)
+    state = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(state["model"])
+    model.to(device).eval()
+
+    context_length = int(cfg.window_index.context_length)
+    if context_length % model_config.patch_len != 0:
+        raise ValueError(
+            f"context_length {context_length} is not a multiple of patch_len "
+            f"{model_config.patch_len}, which the patching in _preprocess_input "
+            "requires"
+        )
+    return TimesFMForecaster(
+        model=model,
+        device=device,
+        normalization_mode=cfg.timesfm.normalization_mode,
+        context_length=context_length,
+        horizon=model_config.horizon_len,
+        quantiles=list(model_config.quantiles),
+    )
+
+
 from src.data import seasonality
 from src.losses import pointwise, quantile
 from src.metrics import forecast

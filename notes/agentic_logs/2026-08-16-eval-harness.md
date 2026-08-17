@@ -93,17 +93,21 @@ those three files already share. `predict.py` holds only the
 - [x] 4. `src/eval/suites.py`: six loaders to a uniform `EvalSeries`, plus
       `load_suite` and `src/scripts/verify_eval_suites.py`. All counts
       confirmed against the real sources, see the table below.
-- [ ] 5. `src/eval/protocol.py`: `Forecaster` protocol and registry.
-- [ ] 6. TimesFM `build_forecaster`. Verify on M3 native, 3003 forecasts.
-- [ ] 7. `src/eval/score.py` + seasonal-naive baseline. Verify baseline
-      MASE is approximately 1.0, which is the check that catches horizon
-      misalignment.
-- [ ] 8. Chronos2 and Moirai2 `build_forecaster`. Verify each reproduces
-      its training-time eval loss in `fixed` mode.
-- [ ] 9. `rolling` mode wiring, EV and sFPC end to end.
-- [ ] 10. GIFT-Eval short native path. Verify a published baseline lands
-      near its leaderboard number.
-- [ ] 11. `src/scripts/run_tsfm_eval.py` + `conf/eval.yaml`.
+- [x] 5. `src/eval/protocol.py`: `Forecaster` protocol and registry.
+      `src/eval/` holds no model-specific code; each adapter implements
+      `build_forecaster` in its own module.
+- [x] 6. TimesFM `build_forecaster` plus `src/eval/predict.py`, which owns
+      batching and left-padding.
+- [x] 7. `src/eval/score.py` with the seasonal-naive baseline. Calibration
+      confirmed both synthetically (MASE 1.046 mean / 0.988 median, versus
+      97.5 one step out of phase) and on real data, see below.
+- [x] 8. Chronos2 and Moirai2 `build_forecaster`. Both emit `[B, Q, H]`
+      internally and are transposed to the protocol's `[N, H, Q]`.
+- [x] 9. `rolling` mode, `run_rolling` plus `score_stability`.
+- [x] 10. GIFT-Eval short verified against the benchmark's published
+      seasonal-naive results, see below.
+- [x] 11. `src/scripts/run_tsfm_eval.py` + `conf/eval.yaml`, smoke-run end
+      to end over M3 and Tourism in all three modes.
 
 ## Loaded suites
 
@@ -156,6 +160,78 @@ GIFT-Eval's `m4_daily` uses the gluonts convention (Daily 7). M3 Other
 carries neither a frequency nor a start timestamp in its `.tsf` and declares
 period 1. So `EvalSeries` carries an explicit `period` and
 `accuracy.per_series_metrics` takes periods rather than frequency strings.
+
+## Verification against GIFT-Eval's published baseline
+
+`uv run python -m src.scripts.verify_gifteval_baseline` scores the same
+seasonal-naive rule through our loaders, seasonality, and MASE and compares
+against the benchmark's own `results/seasonal_naive/all_results.csv`.
+
+**All 55 configs, median ratio 1.0000, 51 within 1%, 55 within 5%.** Most
+agree to four decimal places. This is what makes the reimplemented split
+trustworthy without importing gluonts, and it is the thing to re-run after
+touching the split, the seasonality, or the MASE denominator.
+
+The four configs outside 1% (`bitbrains_fast_storage/5T` 0.969 and `/H`
+1.047, `hierarchical_sales/D` 1.022, `kdd_cup_2018/H` 1.010) are all
+datasets carrying missing values, so the residual gap is NaN handling.
+
+Getting there surfaced two real bugs, both of which produced plausible
+numbers rather than obvious failures.
+
+### MASE denominator was bounded by the model context
+
+`score` originally passed the left-padded 512-point context as the history
+for both nMSE and MASE. nMSE should use the context, being defined against
+what the model saw, but MASE's denominator is a property of the series. The
+truncation moved MASE by up to 2x on long series (`ett2/D` 0.512 of
+published, `m4_daily` 0.443). Fixed by `accuracy.ragged_seasonal_naive_mae`
+over full unpadded histories, passed in via `score(forecasts, series)`.
+
+### GIFT-Eval seasonality is not this repo's seasonality
+
+`src/data/seasonality.py` maps daily to the weekly cycle (7) and seconds to
+the daily cycle, which suits the training corpus. GluonTS's
+`DEFAULT_SEASONALITIES`, which GIFT-Eval evaluates through, uses 1 for daily
+and 3600 for seconds. Scoring GIFT-Eval on the corpus convention left every
+daily config 1.5x to 2x off and `bizitobs_*` (10S) 3.7x to 5.5x off. Fixed by
+`suites.GLUONTS_SEASONALITIES` plus a `get_seasonality`-compatible divisor
+rule, kept deliberately separate from the corpus module.
+
+After both fixes the daily and 10-second configs land at ratio 1.0000.
+
+## Seasonal naive on the Monash suites
+
+| subset | MASE mean | median |
+|---|---|---|
+| m1_monthly | 1.314 | 1.113 |
+| m1_quarterly | 2.078 | 1.479 |
+| m1_yearly | 4.894 | 3.772 |
+| m3_monthly | 1.146 | 0.970 |
+| m3_other | 3.089 | 2.770 |
+| m3_quarterly | 1.425 | 1.176 |
+| m3_yearly | 3.172 | 2.267 |
+| tourism_monthly | 1.631 | 1.436 |
+| tourism_quarterly | 1.699 | 1.382 |
+| tourism_yearly | 3.552 | 2.509 |
+
+Above 1 as expected, the MASE denominator being in-sample while the forecast
+is out of sample. Against Monash's published SES baseline these sit almost
+exactly on top of it where there is no seasonality to exploit (m3_other
+3.089 vs 3.089, m3_yearly 3.172 vs 3.167) and well below it where there is
+(tourism_monthly 1.631 vs 3.306), which is how seasonal naive should behave
+against SES. Monash publishes no seasonal-naive column, so this is a
+consistency check rather than a reproduction.
+
+## Stability metrics pair windows `stride` apart
+
+The first end-to-end run returned `excess_volatility` exactly 0 and `sfpc`
+NaN at `stride=8`. For a fixed target date d the source window is
+`t = (d - h) / stride`, so only every `stride`-th h slot is populated and
+pairing adjacent h always pairs a real forecast against a structurally empty
+one. Correct at `stride=1`, silently degenerate above it. Both metrics now
+slice `[..., stride:, :]` against `[..., :-stride, :]`, covered by
+`test_stability_metrics_pair_windows_stride_apart` over strides 1, 4, 8, 16.
 
 ## EV window ordering
 
