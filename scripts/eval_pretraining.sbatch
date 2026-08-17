@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gifteval_eval
-#SBATCH --partition=project
-#SBATCH --qos=qos_radio_freq
+#SBATCH --partition=general
+#SBATCH --qos=qos_general
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
@@ -22,6 +22,13 @@
 # The model skeleton comes from each run's own resolved_config.yaml via
 # run_dir=, never from conf/eval.yaml's defaults, because a checkpoint only
 # loads into the architecture that produced it.
+#
+# Runs on `general` rather than `project` on purpose. The per-user GPU cap is
+# per QoS, so scoring under qos_general draws on a budget separate from the
+# qos_radio_freq one pretraining uses, and eval no longer queues behind the
+# next model's training. This is inference only at batch 256 over a 512
+# context, so an A6000 or A5000 is ample and the H200s stay free for training,
+# where our jobs are high priority and non-preemptible.
 
 set -euo pipefail
 cd /zfsauton2/home/istepka/ts-normalization
