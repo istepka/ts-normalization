@@ -104,6 +104,12 @@ those three files already share. `predict.py` holds only the
       97.5 one step out of phase) and on real data, see below.
 - [x] 8. Chronos2 and Moirai2 `build_forecaster`. Both emit `[B, Q, H]`
       internally and are transposed to the protocol's `[N, H, Q]`.
+      **Partially verified.** The stated criterion was "each reproduces its
+      training-time eval loss in `fixed` mode"; what was actually done is
+      shape, protocol, finiteness, and ragged-path tests against freshly
+      built checkpoints. The loss comparison needs a trained checkpoint and
+      none exists yet, so it is deferred to the first pretraining run. See
+      the gap below.
 - [x] 9. `rolling` mode, `run_rolling` plus `score_stability`.
 - [x] 10. GIFT-Eval short verified against the benchmark's published
       seasonal-naive results, see below.
@@ -282,6 +288,29 @@ pins it. sFPC is unaffected, being symmetric in the two forecasts.
 Pair validity is additionally derived from the NaN coverage pattern rather
 than from a caller mask alone, so partially covered edge dates do not
 contribute zero-filled terms when no mask is supplied.
+
+## The remaining verification gap
+
+Everything downstream of a forecast is strongly verified: the loaders, the
+GIFT-Eval split, the seasonality, the MASE denominator, and the pooling all
+reproduce the benchmark's published seasonal-naive numbers across 55 configs
+on MASE, MAE, and WQL.
+
+That evidence does not cover `build_forecaster`. The baseline path never
+calls it: it scores a seasonal-naive rule computed in `score.py`. So the
+step that turns a checkpoint into forecasts is the least-verified part of
+the harness, and it is verified only for shape, finiteness, and batching.
+
+Closing it needs a trained TSFM checkpoint, and none exists yet. The 392
+`.pt` files under `/zfsauton/scratch/istepka/lts/artifacts` are from the
+earlier forecasting experiment and carry a different schema
+(`model_state`/`stage`/`epoch` rather than `model`/`optimizer`/`step`).
+
+**First check to run once a pretraining run produces a checkpoint:** score it
+in `fixed` mode and compare against that run's own training-time eval loss.
+The window shape matches by construction, so the two should agree closely,
+and a disagreement localizes the fault to the adapter rather than anywhere
+else in the harness.
 
 ## Open
 
