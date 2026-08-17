@@ -10,6 +10,26 @@ seed: 0
 corpus:
   root: /zfsauton/scratch/istepka/lts/data/giftevalpretrain_full
   datasets: null
+  # Held out for evaluation. M4 and GIFT-Eval are test sets that never
+  # appear in GiftEvalPretrain; M1, M3, Tourism, and Favorita are test sets
+  # that do, so they must be removed here. M1/M3/Tourism series are all
+  # shorter than context 512 + prediction 128 and so contributed no windows
+  # even before this list existed, but Favorita does contribute (78,034
+  # windows, 0.19% of the index), so any index built before this list must
+  # be rebuilt.
+  exclude:
+    - m1_yearly
+    - m1_quarterly
+    - m1_monthly
+    - monash_m3_yearly
+    - monash_m3_quarterly
+    - monash_m3_monthly
+    - monash_m3_other
+    - tourism_yearly
+    - tourism_quarterly
+    - tourism_monthly
+    - favorita_sales
+    - favorita_transactions
 
 window_index:
   context_length: 512

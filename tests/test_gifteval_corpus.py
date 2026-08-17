@@ -1,6 +1,7 @@
 import datasets
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.data.gifteval import corpus as gc
 
@@ -14,6 +15,18 @@ def test_domain_map_covers_real_corpus_exactly():
     for name, entry in domain_map.items():
         assert entry["domain"] in gc.VALID_DOMAINS, name
         assert entry["confidence"] in ("high", "medium", "low"), name
+
+
+def test_discover_dataset_dirs_honors_exclude(tiny_corpus):
+    """corpus.exclude holds evaluation datasets out of pretraining, so an
+    unknown name there must fail rather than silently exclude nothing."""
+    root, _ = tiny_corpus
+    names = gc.discover_dataset_dirs(root)
+    assert gc.discover_dataset_dirs(root, [names[0]]) == names[1:]
+    assert gc.discover_dataset_dirs(root, []) == names
+
+    with pytest.raises(ValueError, match="not found under"):
+        gc.discover_dataset_dirs(root, [names[0], "no_such_dataset"])
 
 
 def test_source_and_frequency_inventory_reproducible(tiny_corpus):

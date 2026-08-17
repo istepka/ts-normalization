@@ -24,6 +24,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Comma-separated; omit for every univariate dataset.",
     )
+    parser.add_argument(
+        "--exclude",
+        type=str,
+        default=None,
+        help="Comma-separated datasets held out for evaluation; must match "
+        "conf/tsfm_base.yaml's corpus.exclude.",
+    )
     parser.add_argument("--context-length", type=int, default=512)
     parser.add_argument("--prediction-length", type=int, default=128)
     parser.add_argument("--stride", type=int, default=512)
@@ -45,7 +52,9 @@ def main() -> None:
         base_seed=args.base_seed,
         max_windows_per_series=args.max_windows_per_series,
     )
-    wi.build_and_save_window_index(args.corpus_root, args.output, args.datasets, config)
+    wi.build_and_save_window_index(
+        args.corpus_root, args.output, args.datasets, config, args.exclude
+    )
 
 
 if __name__ == "__main__":

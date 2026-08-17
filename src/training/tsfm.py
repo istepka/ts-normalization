@@ -56,10 +56,11 @@ def resolve_window_index(
 ) -> wi.WindowIndex:
     domain_map = domain_map if domain_map is not None else gc.load_domain_map()
     root = Path(cfg.corpus.root)
+    exclude = list(cfg.corpus.exclude)
     dataset_names = (
-        list(cfg.corpus.datasets)
+        [n for n in cfg.corpus.datasets if n not in set(exclude)]
         if cfg.corpus.datasets is not None
-        else gc.discover_dataset_dirs(root)
+        else gc.discover_dataset_dirs(root, exclude)
     )
     wi_cfg = wi.WindowIndexConfig(
         context_length=cfg.window_index.context_length,
@@ -72,7 +73,16 @@ def resolve_window_index(
     )
     cache_path = cfg.window_index.cache_path
     if cache_path and Path(cache_path).is_file():
-        return wi.WindowIndex.load(Path(cache_path), wi_cfg, root)
+        index = wi.WindowIndex.load(Path(cache_path), wi_cfg, root)
+        leaked = sorted(set(exclude) & set(index.table["dataset"].unique()))
+        if leaked:
+            raise ValueError(
+                f"cached window index {cache_path} contains held-out datasets "
+                f"{leaked}; rebuild it with build_gifteval_window_index.py "
+                "--exclude rather than filtering here, which would renumber "
+                "the dataset scale groups and break paired-run comparability"
+            )
+        return index
     index = wi.build_window_index(root, dataset_names, domain_map, wi_cfg)
     if cache_path:
         index.save(Path(cache_path))

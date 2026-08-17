@@ -43,7 +43,8 @@ uv run python -m src.scripts.build_gifteval_window_index \
   --output "${OUTPUT}" \
   --context-length "${CONTEXT_LENGTH}" \
   --prediction-length "${PREDICTION_LENGTH}" \
-  --stride "${STRIDE}"
+  --stride "${STRIDE}" \
+  --exclude "${EXCLUDE:-m1_yearly,m1_quarterly,m1_monthly,monash_m3_yearly,monash_m3_quarterly,monash_m3_monthly,monash_m3_other,tourism_yearly,tourism_quarterly,tourism_monthly,favorita_sales,favorita_transactions}"
 
 echo "window index ready at ${OUTPUT}"
 echo "pass window_index.cache_path=${OUTPUT} to run_pretraining.sbatch"

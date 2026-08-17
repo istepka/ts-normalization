@@ -73,7 +73,16 @@ def load_domain_map(path: Path = DOMAIN_MAP_PATH) -> dict[str, dict]:
     return raw
 
 
-def discover_dataset_dirs(corpus_root: Path) -> list[str]:
+def discover_dataset_dirs(
+    corpus_root: Path, exclude: list[str] | None = None
+) -> list[str]:
+    """Dataset directory names under `corpus_root`, minus `exclude`.
+
+    `exclude` holds datasets that must never be trained on because they are
+    held out for evaluation (M1 and M3 by default, see conf/tsfm_base.yaml).
+    An excluded name that is not present under `corpus_root` is an error: a
+    typo there would silently reinstate the very leakage the list prevents.
+    """
     corpus_root = Path(corpus_root)
     if not corpus_root.is_dir():
         raise FileNotFoundError(
@@ -88,6 +97,13 @@ def discover_dataset_dirs(corpus_root: Path) -> list[str]:
     )
     if not names:
         raise FileNotFoundError(f"No dataset directories found under {corpus_root}")
+    if exclude:
+        unknown = sorted(set(exclude) - set(names))
+        if unknown:
+            raise ValueError(
+                f"corpus.exclude names not found under {corpus_root}: {unknown}"
+            )
+        names = [n for n in names if n not in set(exclude)]
     return names
 
 

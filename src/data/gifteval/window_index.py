@@ -363,6 +363,7 @@ def build_and_save_window_index(
     output: Path,
     datasets_csv: str | None,
     config: WindowIndexConfig,
+    exclude_csv: str | None = None,
 ) -> None:
     """Builds the canonical window index over `datasets_csv` (comma-separated,
     or every univariate dataset if None) and saves it to `output`. Paired runs
@@ -372,12 +373,15 @@ def build_and_save_window_index(
     index" section); building it once here avoids every paired training job
     independently re-scanning the corpus and risking a mismatch."""
     domain_map = gc.load_domain_map()
+    exclude = exclude_csv.split(",") if exclude_csv is not None else []
     dataset_names = (
-        datasets_csv.split(",")
+        [n for n in datasets_csv.split(",") if n not in set(exclude)]
         if datasets_csv is not None
-        else gc.discover_dataset_dirs(corpus_root)
+        else gc.discover_dataset_dirs(corpus_root, exclude)
     )
     print(f"building window index over {len(dataset_names)} datasets ...")
+    if exclude:
+        print(f"holding out {len(exclude)} dataset(s) from training: {exclude}")
     print(
         f"window_length = context_length + prediction_length = "
         f"{config.context_length + config.prediction_length} raw points; "

@@ -30,7 +30,11 @@ def _base_cfg(tiny_corpus, tmp_path, model: str) -> OmegaConf:
             "scale_b_high": 10.0,
             "seed": 0,
             "output_dir": str(tmp_path / "out"),
-            "corpus": {"root": str(root), "datasets": ["synth_a", "synth_b"]},
+            "corpus": {
+                "root": str(root),
+                "datasets": ["synth_a", "synth_b"],
+                "exclude": [],
+            },
             "window_index": {
                 "context_length": 64,
                 "prediction_length": 32,
@@ -275,3 +279,20 @@ def test_finalize_summary_keeps_early_auc_when_two_points_are_available():
     summary = train_mod.finalize_summary(history, {}, cfg, optimization)
 
     assert "log_mse_auc_through_2000" in summary
+
+
+def test_cached_index_containing_an_excluded_dataset_is_rejected(tiny_corpus, tmp_path):
+    """A cache_path index built before a dataset was held out would silently
+    train on evaluation data, and filtering it after load would renumber the
+    dataset scale groups; resolve_window_index must refuse it instead."""
+    cfg = _base_cfg(tiny_corpus, tmp_path, "timesfm")
+    cache_path = tmp_path / "index.parquet"
+    train_mod.resolve_window_index(cfg, tiny_corpus[1]).save(cache_path)
+    cfg.window_index.cache_path = str(cache_path)
+
+    reloaded = train_mod.resolve_window_index(cfg, tiny_corpus[1])
+    assert "synth_a" in set(reloaded.table["dataset"].unique())
+
+    cfg.corpus.exclude = ["synth_a"]
+    with pytest.raises(ValueError, match="held-out datasets"):
+        train_mod.resolve_window_index(cfg, tiny_corpus[1])

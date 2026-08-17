@@ -11,6 +11,7 @@ from src.config.base import WandbConfig
 class CorpusConfig:
     root: str = MISSING
     datasets: list[str] | None = None
+    exclude: list[str] = field(default_factory=list)
 
 
 @dataclass
