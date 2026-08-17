@@ -20,7 +20,7 @@ Three modes, reported separately and never pooled.
 | Mode | Protocol | Metrics |
 |---|---|---|
 | `native` | official per suite, ragged history, official horizon | accuracy |
-| `fixed` | 512 context + 128 horizon, long series only | accuracy |
+| `fixed` | 512 context + the model's native horizon, long series only | accuracy |
 | `rolling` | tail of each series, stride < H | accuracy + stability |
 
 `native` is the headline. `fixed` exists as a cross-check against the
@@ -45,9 +45,10 @@ harness-defined mode with its own declared stride.
 ### No rollout is required
 
 Max horizon per suite is 48 (M4 hourly), 18 (Monash), 16 (Favorita), and 60
-(GIFT-Eval short, S freq, `Term.SHORT` multiplier 1). All fit inside every
-model's native 128-step horizon, so `predict` truncates and never rolls out
-autoregressively. This holds only because GIFT-Eval is restricted to the
+(GIFT-Eval short, S freq, `Term.SHORT` multiplier 1). All fit inside every model's native horizon, so
+`predict` truncates and never rolls out autoregressively. The binding
+constraint is Moirai 2.0 at 64 (num_predict_token 4 * patch_size 16), not
+TimesFM's or Chronos-2's 128, so the real margin is 4 steps. This holds only because GIFT-Eval is restricted to the
 short term; medium (10x) and long (15x) would need rollout.
 
 ### Model abstraction
@@ -129,8 +130,9 @@ The last column is the retrospective justification for dropping the
 constraint read into an evaluation definition, and applying it would not
 have produced a worse number so much as no number at all.
 
-Maximum horizon anywhere is 60, against a native model horizon of 128, which
-is what makes the no-rollout claim hold.
+Maximum horizon anywhere is 60, against Moirai 2.0's native 64 (the shortest
+of the three), which is what makes the no-rollout claim hold, with 4 steps to
+spare.
 
 GIFT-Eval counts instances rather than series, being series times rolling
 windows. Its `m4_yearly` holds 22,974 against the official 23,000, which is
