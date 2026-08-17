@@ -206,6 +206,12 @@ def per_series_metrics(
         "smape": smape,
         "crps": crps,
         "wql": wql,
+        # WQL is a ratio of sums, not a mean of per-series ratios, so its two
+        # halves travel separately for `pool` to aggregate. Averaging the
+        # per-series `wql` column instead puts it ~16% off GIFT-Eval's
+        # published ND wherever the per-series denominator varies.
+        "wql_num": wql_total,
+        "wql_den": abs_target,
         "mape_coverage": ape_counts / counts,
     }
 
@@ -216,10 +222,33 @@ def pool(per_series: dict[str, np.ndarray]) -> dict[str, float]:
     Reported alongside a count per metric, because a mean over 200 of 83,207
     Favorita series is a different claim than a mean over all of them and the
     difference is invisible in the number itself.
+
+    WQL is the exception and pools as a ratio of sums, which is how the
+    literature and GIFT-Eval define it. Any `<name>_num` / `<name>_den` pair
+    aggregates that way and the halves are dropped from the output.
     """
+    ratios = {
+        name.removesuffix("_num")
+        for name in per_series
+        if name.endswith("_num") and f"{name.removesuffix('_num')}_den" in per_series
+    }
+    halves = {f"{name}_num" for name in ratios} | {f"{name}_den" for name in ratios}
+
     out = {}
     for name, values in per_series.items():
+        if name in halves or name in ratios:
+            continue
         finite = np.isfinite(values)
         out[name] = float(np.nanmean(values[finite])) if finite.any() else float("nan")
         out[f"{name}_n"] = int(finite.sum())
+
+    for name in sorted(ratios):
+        numerator = np.asarray(per_series[f"{name}_num"], dtype=float)
+        denominator = np.asarray(per_series[f"{name}_den"], dtype=float)
+        usable = np.isfinite(numerator) & np.isfinite(denominator) & (denominator > 0)
+        total = float(denominator[usable].sum())
+        out[name] = (
+            float(numerator[usable].sum() / total) if total > 0 else float("nan")
+        )
+        out[f"{name}_n"] = int(usable.sum())
     return out

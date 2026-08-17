@@ -23,6 +23,7 @@ import pandas as pd
 
 from src.eval import predict, score, suites
 from src.eval.predict import Forecasts
+from src.metrics import accuracy
 
 DEFAULT_ROOT = "/zfsauton/scratch/istepka/lts/data/gift-eval"
 # The published results rename some configs: lowercase throughout, no
@@ -56,9 +57,9 @@ def main() -> None:
     published = pd.read_csv(root / "results/seasonal_naive/all_results.csv")
     published = published[published.dataset.str.endswith("/short")]
     reference = {}
-    for dataset, mase in zip(published.dataset, published["eval_metrics/MASE[0.5]"]):
+    for dataset, row in zip(published.dataset, published.to_dict("records")):
         name, freq, _ = dataset.split("/")
-        reference[(name, freq)] = mase
+        reference[(name, freq)] = row
 
     series = suites.load_gifteval_short(root)
     by_config = collections.defaultdict(list)
@@ -81,7 +82,7 @@ def main() -> None:
             subsets=[item.subset for item in items],
             item_ids=[item.item_id for item in items],
         )
-        metrics = score.score(forecasts, items)
+        pooled = accuracy.pool(score.score(forecasts, items))
 
         name = published_key(config)
         freq = config.split("/")[1] if "/" in config else None
@@ -92,28 +93,36 @@ def main() -> None:
             key = candidates[0]
         else:
             key = (name, freq)
+        entry = reference[key]
+        # WQL is compared against their ND column, not their WQL column. Our
+        # baseline is a median-only forecast, and for a single 0.5 quantile
+        # the doubled pinball loss reduces to the absolute error, so WQL is
+        # ND by definition. Their WQL is over a 9-quantile distribution and
+        # is not the same quantity.
         rows.append(
             {
                 "config": config,
-                "ours": float(np.nanmean(metrics["mase"])),
-                "published": reference[key],
+                "mase": pooled["mase"] / entry["eval_metrics/MASE[0.5]"],
+                "mae": pooled["mae"] / entry["eval_metrics/MAE[0.5]"],
+                "wql": pooled["wql"] / entry["eval_metrics/ND[0.5]"],
             }
         )
 
-    table = pd.DataFrame(rows).sort_values("config")
-    table["ratio"] = table.ours / table.published
-    gap = (table.ratio - 1).abs()
+    table = pd.DataFrame(rows).sort_values("config").replace([np.inf, -np.inf], np.nan)
     print(table.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
-    print()
-    print(
-        f"{len(table)} configs, median ratio {table.ratio.median():.4f}, "
-        f"within 1%: {(gap < 0.01).sum()}, within {args.tolerance:.0%}: "
-        f"{(gap < args.tolerance).sum()}"
-    )
-    drifted = table[gap >= args.tolerance]
-    if not drifted.empty:
-        print("\ndrifted beyond tolerance:")
-        print(drifted.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+    print("\nratio ours/published:")
+    drifted = {}
+    for metric in ("mase", "mae", "wql"):
+        values = table[metric].dropna()
+        gap = (values - 1).abs()
+        drifted[metric] = int((gap >= args.tolerance).sum())
+        print(
+            f"  {metric:5s} median {values.median():.4f}  within 1%: "
+            f"{(gap < 0.01).sum():2d}/{len(values)}  within "
+            f"{args.tolerance:.0%}: {(gap < args.tolerance).sum():2d}/{len(values)}"
+        )
+    if any(drifted.values()):
+        print(f"\nconfigs beyond tolerance: {drifted}")
 
 
 if __name__ == "__main__":

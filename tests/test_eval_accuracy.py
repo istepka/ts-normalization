@@ -190,3 +190,34 @@ def test_pool_drops_undefined_series_and_counts_them():
     pooled = accuracy.pool(per_series)
     assert pooled["mase"] == pytest.approx(2.0)
     assert pooled["mase_n"] == 2
+
+
+def test_wql_pools_as_a_ratio_of_sums_not_a_mean_of_ratios():
+    """WQL and ND are globally normalized, so pooling must sum numerator and
+    denominator separately. Averaging per-series ratios instead put us ~16%
+    off GIFT-Eval's published ND, because the denominator varies per series.
+
+    Two series with very different magnitudes make the two definitions
+    disagree, which a same-scale fixture would hide."""
+    targets = np.array([[1.0, 1.0], [100.0, 100.0]])
+    forecast = _quantile_stack(np.array([[2.0, 2.0], [110.0, 110.0]]))
+    history = np.tile(np.arange(1.0, 21.0), (2, 1))
+
+    per_series = accuracy.per_series_metrics(
+        forecast,
+        targets,
+        np.ones_like(targets),
+        history,
+        np.ones_like(history),
+        QUANTILES,
+        np.array([7, 7]),
+    )
+    pooled = accuracy.pool(per_series)
+
+    # median-only error is |2-1|*2 = 2 and |110-100|*2 = 20; the doubled
+    # pinball loss over a 3-quantile stack all equal to the median reduces to
+    # the absolute error, so WQL = (2 + 20) / (2 + 200)
+    assert pooled["wql"] == pytest.approx(22.0 / 202.0)
+    assert pooled["wql"] != pytest.approx(np.mean(per_series["wql"]))
+    assert pooled["wql_n"] == 2
+    assert "wql_num" not in pooled and "wql_den" not in pooled
