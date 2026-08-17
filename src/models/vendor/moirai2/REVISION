@@ -52,8 +52,12 @@ notes: >
     numpy_to_torch_dtype_dict (unused once MultiInSizeLinear/etc. above are
     dropped).
 
+  - attention.py: passes zero dropout to PyTorch's scaled dot-product
+    attention when the module is in evaluation mode. PyTorch applies the
+    supplied dropout probability regardless of module mode.
+
   All other vendored files (module.py, packed_scaler.py, norm.py,
-  transformer.py, attention.py, ffn.py, position/attn_bias.py,
+  transformer.py, ffn.py, position/attn_bias.py,
   position/attn_projection.py) are otherwise byte-for-byte translations of
   upstream, differing only in the two uniform deviations above (jaxtyping
   removal, relative imports). Unused classes within those files (e.g.

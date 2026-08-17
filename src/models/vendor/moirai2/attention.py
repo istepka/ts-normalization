@@ -276,13 +276,14 @@ class GroupedQueryAttention(nn.Module):
             query_time_id=query_time_id,
             kv_time_id=kv_time_id,
         )
+        dropout_p = self.attn_dropout_p if self.training else 0.0
 
         out = F.scaled_dot_product_attention(
             query,
             key,
             value,
             attn_mask=attn_mask,
-            dropout_p=self.attn_dropout_p,
+            dropout_p=dropout_p,
             scale=self.softmax_scale,
         )
         out = rearrange(out, "... group hpg q_len dim -> ... q_len (group hpg dim)")

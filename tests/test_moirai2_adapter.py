@@ -90,6 +90,28 @@ def test_original_predictions_are_inverse_of_normalized_predictions(tiny_corpus)
     )
 
 
+def test_evaluation_disables_attention_dropout(tiny_corpus):
+    config = ma.Moirai2Config(
+        **{
+            **_tiny_config().__dict__,
+            "attn_dropout_p": 0.2,
+            "dropout_p": 0.2,
+        }
+    )
+    index, cache = _tiny_index(tiny_corpus)
+    rows = index.split("train").sample(n=4, random_state=2)
+    batch = ma.make_batch(index, rows, cache, config)
+    model = ma.build_moirai2_model(config, seed=0).eval()
+
+    with torch.no_grad():
+        first = ma.forward(model, batch, "moirai2_normalized", config)
+        second = ma.forward(model, batch, "moirai2_normalized", config)
+
+    assert torch.equal(first.original_point_forecast, second.original_point_forecast)
+    assert torch.equal(first.normalized_mse, second.normalized_mse)
+    assert torch.equal(first.mase, second.mase)
+
+
 def test_controlled_scale_changes_only_original_loss_gradient():
     config = _tiny_config()
     model = ma.build_moirai2_model(config, seed=0)
