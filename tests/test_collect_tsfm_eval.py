@@ -58,14 +58,43 @@ def test_frequency_grain_keeps_the_subsets_apart(table):
     assert sit.loc["H", "mase"].unique() == pytest.approx(2.0)
 
 
-def test_ratio_is_sit_over_revin(table):
+def test_conditions_are_disaggregated_one_row_each(table):
     per_run = collect.collapse(table, METRICS, ("suite",))
     comparison = collect.compare_conditions(per_run, METRICS, ("suite",))
-    row = comparison.iloc[0]
-    assert row["mase_sit"] == pytest.approx(1.1)
-    assert row["mase_revin"] == pytest.approx(2.2)
-    assert row["mase_ratio"] == pytest.approx(0.5)
-    assert row["n_seeds"] == 2
+    assert set(comparison["space"]) == {"SIT", "RevIN"}
+    indexed = comparison.set_index("space")
+    assert indexed.loc["SIT", "mase"] == pytest.approx(1.1)
+    assert indexed.loc["RevIN", "mase"] == pytest.approx(2.2)
+    assert indexed.loc["SIT", "n_seeds"] == 2
+
+
+def test_ratio_table_is_sit_over_revin(table):
+    per_run = collect.collapse(table, METRICS, ("suite",))
+    comparison = collect.compare_conditions(per_run, METRICS, ("suite",))
+    row = collect.ratios(comparison, METRICS, ("suite",)).iloc[0]
+    assert row["mase"] == pytest.approx(0.5)
+
+
+def test_median_ignores_the_subset_weighting(table):
+    """The mean weights m4_monthly's 9000 series; the median does not, and
+    that difference is the whole point of reporting both."""
+    per_run = collect.collapse(table, METRICS, ("suite",))
+    sit = per_run[per_run.condition == "chronos2_normalized"].iloc[0]
+    assert sit["mase"] == pytest.approx(1.1)
+    assert sit["mase_median"] == pytest.approx(1.5)
+
+
+def test_a_degenerate_subset_moves_the_mean_but_not_the_median():
+    """The failure this exists to catch: on the first real run m4_daily
+    carried nMSE 2.0e7 and dragged the M4 mean four orders of magnitude
+    above the median, which tracked training-time eval."""
+    rows = [
+        _row("chronos2_normalized", 0, "m4", f"s{i}", "M", 100, 1.5) for i in range(9)
+    ]
+    rows.append(_row("chronos2_normalized", 0, "m4", "m4_daily", "D", 100, 2.0e7))
+    per_run = collect.collapse(pd.DataFrame(rows), METRICS, ("suite",))
+    assert per_run["mase"].iloc[0] > 1e6
+    assert per_run["mase_median"].iloc[0] == pytest.approx(1.5)
 
 
 def test_timesfm_native_original_is_read_as_revin():
@@ -77,16 +106,17 @@ def test_timesfm_native_original_is_read_as_revin():
     ]
     per_run = collect.collapse(pd.DataFrame(rows), METRICS, ("suite",))
     comparison = collect.compare_conditions(per_run, METRICS, ("suite",))
-    row = comparison.iloc[0]
-    assert row["mase_sit"] == pytest.approx(1.0)
-    assert row["mase_revin"] == pytest.approx(2.0)
+    indexed = comparison.set_index("space")
+    assert indexed.loc["SIT", "mase"] == pytest.approx(1.0)
+    assert indexed.loc["RevIN", "mase"] == pytest.approx(2.0)
 
 
 def test_report_tables_are_well_formed(table):
     per_run = collect.collapse(table, METRICS, ("suite", "freq"))
     comparison = collect.compare_conditions(per_run, METRICS, ("suite", "freq"))
+    ratio_table = collect.ratios(comparison, METRICS, ("suite", "freq"))
     report = collect.render_report(
-        comparison, per_run, ("suite", "freq"), "test report"
+        comparison, ratio_table, per_run, ("suite", "freq"), "test report"
     )
     blocks = {}
     heading = None

@@ -55,6 +55,14 @@ def collapse(
     because the suites are unbalanced enough that a flat mean over
     GIFT-Eval's 55 configs is a different claim than a mean over its
     instances.
+
+    Both a weighted mean and an unweighted median across subsets are emitted,
+    the median under a `_median` suffix. The mean alone is not a safe summary
+    of nMSE: its per-series denominator is the context variance and is
+    unbounded, so on the first real run `m4_daily` carried a subset nMSE of
+    2.0e7 and dragged the M4 mean to 1.4e7 while the median over 47 subsets
+    sat at 1.55, against a training-time 1.50. MASE and WQL have bounded
+    denominators and their means are trustworthy.
     """
     present = [name for name in metrics if name in table.columns]
     counts = pd.to_numeric(table["n_series"], errors="coerce").fillna(0.0)
@@ -71,6 +79,7 @@ def collapse(
                 entry[name] = float(
                     (column[usable] * weight[usable]).sum() / weight[usable].sum()
                 )
+                entry[f"{name}_median"] = float(column[usable].median())
         rows.append(entry)
     return pd.DataFrame(rows)
 
@@ -85,82 +94,138 @@ def compare_conditions(
     the two names are the same distinction under different labels. TimesFM's
     original-space condition is `timesfm_native_original`, hence the suffix
     test rather than an equality.
+
+    Returns one row per (*grain, mode, space) rather than pairing SIT and
+    RevIN into the same row. The paired layout crammed two numbers and a
+    ratio into each cell and was awkward to read; a column of one number
+    each scans down cleanly.
     """
-    present = [name for name in metrics if name in per_run.columns]
+    present = [
+        name
+        for base in metrics
+        for name in (base, f"{base}_median")
+        if name in per_run.columns
+    ]
     per_run = per_run.assign(
         space=per_run["condition"].map(
-            lambda name: "sit" if name.endswith("normalized") else "revin"
+            lambda name: "SIT" if name.endswith("normalized") else "RevIN"
         )
     )
-    keys = ("model", *grain, "mode")
+    keys = ("model", *grain, "mode", "space")
     rows = []
     for values, group in per_run.groupby(list(keys)):
         entry = dict(zip(keys, values))
         entry["n_seeds"] = int(group["seed"].nunique())
         for name in present:
-            for space in ("sit", "revin"):
-                column = pd.to_numeric(
-                    group.loc[group["space"] == space, name], errors="coerce"
-                ).dropna()
-                entry[f"{name}_{space}"] = (
-                    float(column.mean()) if len(column) else float("nan")
-                )
-                entry[f"{name}_{space}_std"] = (
-                    float(column.std(ddof=1)) if len(column) > 1 else float("nan")
-                )
-            revin = entry[f"{name}_revin"]
-            entry[f"{name}_ratio"] = (
-                entry[f"{name}_sit"] / revin if revin else float("nan")
+            column = pd.to_numeric(group[name], errors="coerce").dropna()
+            entry[name] = float(column.mean()) if len(column) else float("nan")
+            entry[f"{name}_std"] = (
+                float(column.std(ddof=1)) if len(column) > 1 else float("nan")
             )
+        rows.append(entry)
+    return pd.DataFrame(rows)
+
+
+def ratios(comparison: pd.DataFrame, metrics: tuple[str, ...], grain: tuple[str, ...]):
+    """SIT over RevIN per (*grain, mode), one number per metric.
+
+    Kept as its own table rather than a third column beside each pair, so the
+    disaggregated tables stay one-number-per-cell.
+    """
+    present = [
+        name
+        for base in metrics
+        for name in (base, f"{base}_median")
+        if name in comparison.columns
+    ]
+    keys = ("model", *grain, "mode")
+    rows = []
+    for values, group in comparison.groupby(list(keys)):
+        entry = dict(zip(keys, values))
+        indexed = group.set_index("space")
+        for name in present:
+            if {"SIT", "RevIN"} <= set(indexed.index):
+                revin = indexed.loc["RevIN", name]
+                entry[name] = (
+                    float(indexed.loc["SIT", name] / revin)
+                    if pd.notna(revin) and revin
+                    else float("nan")
+                )
         rows.append(entry)
     return pd.DataFrame(rows)
 
 
 def render_report(
     comparison: pd.DataFrame,
+    ratio_table: pd.DataFrame,
     per_run: pd.DataFrame,
     grain: tuple[str, ...],
     title: str,
 ) -> str:
-    """A markdown table per metric, since a single wide table is unreadable.
+    """Three tables: weighted mean, subset median, and the SIT/RevIN ratio.
 
-    Every table is SIT against RevIN, which is the comparison the experiment
-    is about. `grain` decides the row key: benchmark alone for the main
-    tables, benchmark and frequency for the appendix ones.
+    Rows are disaggregated, one condition each, and every cell holds a single
+    number. Metrics are the columns, so a benchmark reads across and a
+    condition reads down.
     """
+
+    def block(frame, columns, keys, label, note):
+        present = [name for name in columns if name in frame.columns]
+        present = [name for name in present if frame[name].notna().any()]
+        if not present:
+            return []
+        # M1, M3, and Tourism have no series long enough for `fixed`, so those
+        # rows carry nothing. Dropping them keeps the table to modes that
+        # actually produced a number.
+        frame = frame[frame[present].notna().any(axis=1)]
+        if frame.empty:
+            return []
+        out = [f"## {label}", "", note, ""]
+        out.append("| " + " | ".join((*keys, *present)) + " |")
+        out.append("|" + "|".join(["---"] * (len(keys) + len(present))) + "|")
+        for _, row in frame.sort_values(list(keys)).iterrows():
+            cells = [str(row[key]) for key in keys]
+            for name in present:
+                value = row[name]
+                cells.append("" if pd.isna(value) else f"{value:.4f}")
+            out.append("| " + " | ".join(cells) + " |")
+        out.append("")
+        return out
+
+    metrics = ACCURACY_METRICS + STABILITY_METRICS
+    medians = tuple(f"{name}_median" for name in metrics)
+    keys = ("model", *grain, "mode", "space")
+
     lines = [f"# {title}", ""]
     runs = per_run[["model", "condition", "seed"]].drop_duplicates()
     lines.append(f"{len(runs)} runs scored, {per_run['seed'].nunique()} seeds.")
     lines.append("")
-    lines.append(
-        "Every metric is lower-is-better, so a ratio below 1 favors SIT. "
-        "Mean over seeds, standard deviation in brackets."
-    )
+    lines.append("Every metric is lower-is-better. Values are the mean over seeds.")
     lines.append("")
 
-    header = " | ".join(("model", *grain, "mode", "SIT", "RevIN", "SIT/RevIN"))
-    divider = "|".join(["---"] * (len(grain) + 5))
-    for name in ACCURACY_METRICS + STABILITY_METRICS:
-        column = f"{name}_ratio"
-        if column not in comparison.columns:
-            continue
-        block = comparison[comparison[column].notna()]
-        if block.empty:
-            continue
-        lines.append(f"## {name}")
-        lines.append("")
-        lines.append(f"| {header} |")
-        lines.append(f"|{divider}|")
-        for _, row in block.sort_values(["model", *grain, "mode"]).iterrows():
-            cells = [row["model"], *(str(row[key]) for key in grain), row["mode"]]
-            lines.append(
-                "| "
-                + " | ".join(cells)
-                + f" | {row[f'{name}_sit']:.4f} [{row[f'{name}_sit_std']:.4f}]"
-                + f" | {row[f'{name}_revin']:.4f} [{row[f'{name}_revin_std']:.4f}]"
-                + f" | {row[column]:.4f} |"
-            )
-        lines.append("")
+    lines += block(
+        comparison,
+        metrics,
+        keys,
+        "Subset-weighted mean",
+        "Subsets weighted by series count within each benchmark.",
+    )
+    lines += block(
+        comparison,
+        medians,
+        keys,
+        "Subset median",
+        "Median across subsets, unweighted. Prefer this for nMSE, whose "
+        "per-series denominator is unbounded and whose mean a single "
+        "degenerate subset can dominate.",
+    )
+    lines += block(
+        ratio_table,
+        metrics + medians,
+        ("model", *grain, "mode"),
+        "SIT / RevIN",
+        "Below 1 favors SIT.",
+    )
     return "\n".join(lines)
 
 
@@ -188,12 +253,15 @@ def main() -> None:
     for label, (grain, title) in GRAINS.items():
         per_run = collapse(table, metrics, grain)
         comparison = compare_conditions(per_run, metrics, grain)
+        ratio_table = ratios(comparison, metrics, grain)
         per_run.to_csv(out_dir / f"eval_by_run_{label}.csv", index=False)
         comparison.to_csv(out_dir / f"eval_comparison_{label}.csv", index=False)
-        report = render_report(comparison, per_run, grain, title)
+        ratio_table.to_csv(out_dir / f"eval_ratio_{label}.csv", index=False)
+        report = render_report(comparison, ratio_table, per_run, grain, title)
         (out_dir / f"eval_report_{label}.md").write_text(report)
         print(f"\n{report}")
         print(f"wrote {out_dir / f'eval_comparison_{label}.csv'}")
+        print(f"wrote {out_dir / f'eval_ratio_{label}.csv'}")
         print(f"wrote {out_dir / f'eval_report_{label}.md'}")
 
 
