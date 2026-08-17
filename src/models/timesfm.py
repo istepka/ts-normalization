@@ -44,7 +44,6 @@ from src.models import normalization
 from src.models.vendor.timesfm_v1.pytorch_patched_decoder import (
     PatchedTimeSeriesDecoder,
     TimesFMConfig,
-    _shift_padded_seq,
 )
 
 TIMESFM_REVISION = "705685c9122eeecc53e57285e44598c3453acb60"
@@ -63,7 +62,9 @@ class TimesFMScheme(normalization.NormalizationScheme):
     `first_patch` reproduces vendored `_masked_mean_std`, which takes the
     statistics of the first patch holding more than three unpadded values.
     `whole_context` takes them over the entire valid context instead, which is
-    this repo's causal variant (see `_preprocess_whole_context`).
+    this repo's causal variant. It used to need a parallel copy of the vendored
+    preprocessing; now that normalization is external, it is just a different
+    statistic over the same code path.
     """
 
     def __init__(
@@ -202,6 +203,9 @@ def build_timesfm_model(config: TimesFMConfig, seed: int) -> PatchedTimeSeriesDe
         torch.manual_seed(seed)
         model = PatchedTimeSeriesDecoder(config)
         _initialize_attention_scaling(model)
+        # `src/models/normalization.py` owns the transform now, so the
+        # backbone must not normalize a second time.
+        TimesFMNormalization(config).disable(model)
         return model
     finally:
         torch.random.set_rng_state(generator_state)
@@ -334,55 +338,31 @@ def make_batch(
     )
 
 
-def _preprocess_whole_context(
-    model: PatchedTimeSeriesDecoder, batch: TimesFMBatch
-) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
-    """TimesFM preprocessing with causal statistics from the whole context."""
-    batch_size = batch.context.shape[0]
-    patched_inputs = batch.context.view(batch_size, -1, model.config.patch_len)
-    patched_pads = batch.context_padding.view(batch_size, -1, model.config.patch_len)
-    patched_inputs = torch.where(patched_pads == 1.0, 0.0, patched_inputs)
-    patched_pads = torch.where(
-        torch.abs(patched_inputs - model.config.pad_val) < model.config.tolerance,
-        torch.ones_like(patched_pads),
-        patched_pads,
-    )
-
-    valid = 1.0 - patched_pads
-    count = valid.sum(dim=(1, 2)).clamp_min(1.0)
-    mu = (patched_inputs * valid).sum(dim=(1, 2)) / count
-    centered = (patched_inputs - mu[:, None, None]) * valid
-    sigma = torch.sqrt((centered.square().sum(dim=(1, 2)) / count).clamp_min(0.0))
-    sigma = sigma.clamp_min(model.config.tolerance)
-    normalized = centered / sigma[:, None, None]
-
-    concat_inputs = torch.cat([normalized, patched_pads], dim=-1)
-    model_input = model.input_ff_layer(concat_inputs)
-    patched_padding = torch.min(patched_pads, dim=-1)[0]
-    if model.config.use_positional_embedding:
-        pos_emb = model.position_emb(model_input.shape[1]).to(model_input.device)
-        pos_emb = torch.concat([pos_emb] * model_input.shape[0], dim=0)
-        model_input += _shift_padded_seq(patched_padding, pos_emb)
-    return model_input, patched_padding, (mu, sigma)
-
-
 def run_decoder(
     model: PatchedTimeSeriesDecoder,
     batch: TimesFMBatch,
     normalization_mode: str = "first_patch",
 ):
-    """Forward pass exposing both the normalized (pre-inverse-transform) and
-    original-space (post-inverse-transform) last-patch output, following the
-    exact same submodule sequence as `PatchedTimeSeriesDecoder.forward`."""
+    """Forward pass exposing the last-patch output in both spaces.
+
+    The context is normalized here rather than inside `_preprocess_input`,
+    whose `_forward_transform` `build_timesfm_model` has made the identity.
+    Both statistic modes therefore share one code path and differ only in the
+    scheme, where previously `whole_context` needed a parallel copy of the
+    vendored preprocessing.
+
+    `_preprocess_input` still zeroes padded positions and rebuilds the padding
+    mask from the `pad_val` sentinel, which survives because the scheme
+    re-stamps it after scaling.
+    """
     num_outputs = len(model.config.quantiles) + 1
-    if normalization_mode not in NORMALIZATION_MODES:
-        raise ValueError(f"normalization_mode must be one of {NORMALIZATION_MODES}")
-    if normalization_mode == "first_patch":
-        model_input, patched_padding, stats, _ = model._preprocess_input(
-            input_ts=batch.context, input_padding=batch.context_padding
-        )
-    else:
-        model_input, patched_padding, stats = _preprocess_whole_context(model, batch)
+    backbone = TimesFMNormalization(model.config, mode=normalization_mode)
+    z_context, stats = backbone.transform_input(
+        batch.context, 1.0 - batch.context_padding
+    )
+    model_input, patched_padding, _, _ = model._preprocess_input(
+        input_ts=z_context, input_padding=batch.context_padding
+    )
     f_emb = model.freq_emb(batch.freq)
     model_input = model_input + f_emb
     model_output = model.stacked_transformer(model_input, patched_padding)
@@ -390,10 +370,10 @@ def run_decoder(
     output_ts = model.horizon_ff_layer(model_output)
     b, n, _ = output_ts.shape
     normalized_out = output_ts.view(b, n, model.config.horizon_len, num_outputs)
-    original_out = model._reverse_transform(normalized_out, stats)
 
     # Last patch position forecasts the held-out horizon.
-    return normalized_out[:, -1], original_out[:, -1], stats
+    last = normalized_out[:, -1]
+    return last, stats.inverse(last), stats
 
 
 @dataclass
@@ -413,14 +393,11 @@ def forward(
     condition: str,
     normalization_mode: str = "first_patch",
 ) -> TimesFMForwardResult:
-    if condition not in CONDITIONS:
-        raise ValueError(
-            f"unknown condition {condition!r}, must be one of {CONDITIONS}"
-        )
-
-    normalized_out, original_out, (mu, sigma) = run_decoder(
-        model, batch, normalization_mode
+    module = TimesFMNormalization(model.config, mode=normalization_mode).module(
+        condition
     )
+
+    normalized_out, original_out, stats = run_decoder(model, batch, normalization_mode)
     quantiles = model.config.quantiles
 
     # Eligibility must not depend on the imposed scale. Dividing the selected
@@ -428,17 +405,16 @@ def forward(
     # This also catches a near-flat first patch that crosses the 1e-6 clamp only
     # after receiving b=10, which the previous post-intervention check retained
     # in one assignment and dropped in its complement.
-    base_sigma = sigma / batch.scale
-    degenerate = base_sigma <= model.config.tolerance * (1.0 + 1e-6)
+    base_sigma = stats.scale / batch.scale
+    degenerate = base_sigma <= stats.scheme.scale_floor * (1.0 + 1e-6)
 
-    if condition == "timesfm_native_original":
-        point = original_out[..., 0]
-        quantile_pred = original_out[..., 1:]
-        target = batch.target
-    else:
-        point = normalized_out[..., 0]
-        quantile_pred = normalized_out[..., 1:]
-        target = (batch.target - mu.unsqueeze(-1)) / sigma.unsqueeze(-1)
+    # The condition is the whole difference: SIT scores in normalized space,
+    # RevIN in original space, off the same forward pass.
+    predictions, target = module.transform_target_and_output(
+        normalized_out, batch.target, stats
+    )
+    point = predictions[..., 0]
+    quantile_pred = predictions[..., 1:]
 
     mse = pointwise.masked_mse(point, target, batch.target_valid, reduction="none")
     pinball = quantile.pinball_loss(
@@ -451,7 +427,7 @@ def forward(
 
     # Evaluation metrics, computed regardless of which space `condition`
     # optimizes in so both arms are scored on identical definitions.
-    normalized_target = (batch.target - mu.unsqueeze(-1)) / sigma.unsqueeze(-1)
+    normalized_target = stats.forward(batch.target)
     normalized_mse = pointwise.masked_mse(
         normalized_out[..., 0], normalized_target, batch.target_valid, reduction="none"
     )

@@ -1,5 +1,3 @@
-import dataclasses
-
 import numpy as np
 import torch
 
@@ -39,14 +37,29 @@ def _tiny_index(tiny_corpus):
     return index, wi.SeriesCache(root)
 
 
+def _with_native_normalization(model, config):
+    """Puts the backbone's own InstanceNorm back.
+
+    `build_chronos2_model` disables it, so a test that wants the pre-refactor
+    behavior as a reference has to restore it. InstanceNorm holds no
+    parameters, so this does not perturb the model's weights.
+    """
+    from chronos.chronos_bolt import InstanceNorm
+
+    model.instance_norm = InstanceNorm(eps=1e-5, use_arcsinh=config.use_arcsinh)
+    return model
+
+
 def test_forward_matches_official_native_loss(tiny_corpus):
     index, cache = _tiny_index(tiny_corpus)
     rows = index.split("train").sample(n=4, random_state=0)
     batch = ca.make_batch(index, rows, cache)
-    model = ca.build_chronos2_model(_tiny_config(), seed=0)
+    config = _tiny_config()
+    model = ca.build_chronos2_model(config, seed=0)
 
     result = ca.forward(model, batch, "chronos2_normalized")
-    official = model(
+    # The official path normalizes internally, so it needs its InstanceNorm.
+    official = _with_native_normalization(model, config)(
         context=batch.context,
         context_mask=batch.context_valid,
         future_target=batch.target,
@@ -66,11 +79,8 @@ def test_original_predictions_are_inverse_of_normalized_predictions(tiny_corpus)
     model = ca.build_chronos2_model(_tiny_config(), seed=0)
 
     normalized, original, stats = ca.run_model(model, batch)
-    reconstructed = model.instance_norm.inverse(
-        normalized.reshape(normalized.shape[0], -1), stats
-    ).reshape_as(normalized)
 
-    assert torch.allclose(reconstructed, original, atol=1e-5)
+    assert torch.allclose(stats.inverse(normalized), original, atol=1e-5)
 
 
 def test_controlled_scale_changes_only_original_loss_gradient():
@@ -170,26 +180,51 @@ def test_disabled_backbone_reproduces_the_original_bit_identically(tiny_corpus):
     rows = index.split("train").sample(n=4, random_state=0)
     batch = ca.make_batch(index, rows, cache)
 
-    reference = ca.build_chronos2_model(config, seed=0)
+    # build_chronos2_model disables the normalizer, so the pre-refactor
+    # reference is reconstructed by putting the native InstanceNorm back and
+    # driving the backbone's own encode path.
+    reference = _with_native_normalization(
+        ca.build_chronos2_model(config, seed=0), config
+    )
     reference.eval()
+    num_output_patches = (
+        batch.target.shape[1] // reference.chronos_config.output_patch_size
+    )
     with torch.no_grad():
-        normalized_reference, original_reference, _ = ca.run_model(reference, batch)
+        encoder_output, loc_scale, _, _ = reference.encode(
+            context=batch.context,
+            context_mask=batch.context_valid,
+            num_output_patches=num_output_patches,
+        )
+        hidden = encoder_output.last_hidden_state[:, -num_output_patches:]
+        projected = reference.output_patch_embedding(hidden)
+        batch_size = projected.shape[0]
+        normalized_reference = (
+            projected.view(
+                batch_size,
+                num_output_patches,
+                reference.num_quantiles,
+                reference.chronos_config.output_patch_size,
+            )
+            .permute(0, 2, 1, 3)
+            .reshape(batch_size, reference.num_quantiles, -1)
+        )
+        original_reference = reference.instance_norm.inverse(
+            normalized_reference.reshape(batch_size, -1), loc_scale
+        ).reshape_as(normalized_reference)
 
     external = ca.build_chronos2_model(config, seed=0)
-    backbone = ca.Chronos2Normalization(config)
-    backbone.disable(external)
+    backbone = ca.Chronos2Normalization.from_model(external)
     external.eval()
 
-    module = backbone.module("chronos2_normalized")
-    z_context, stats = module.transform_input(batch.context, batch.context_valid)
+    # run_model normalizes internally now, so it takes the raw batch.
     with torch.no_grad():
-        normalized_external, _, _ = ca.run_model(
-            external, dataclasses.replace(batch, context=z_context)
-        )
+        normalized_external, original_external, _ = ca.run_model(external, batch)
 
+    assert backbone.scheme.use_arcsinh == config.use_arcsinh
     assert torch.equal(normalized_reference, normalized_external)
     # RevIN reads the same forward pass in the original space.
-    assert torch.equal(stats.inverse(normalized_external), original_reference)
+    assert torch.equal(original_external, original_reference)
 
 
 def test_identity_instance_norm_is_the_identity():

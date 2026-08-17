@@ -172,20 +172,37 @@ and the original space. That is the gate: the module can replace a backbone's
 internal normalization without moving any training numerics, so adopting it
 does not invalidate existing runs.
 
-Full suite: 181 passed.
+Replacing a submodule could have changed `state_dict` keys and broken loading
+of existing checkpoints in the eval harness. It does not, for any of the four:
+`InstanceNorm`, `PackedStdScaler`, and affine-free `RevIN` hold no parameters
+or buffers, and TimesFM only rebinds methods. Checked by diffing the key sets
+before and after `disable`, empty both ways.
 
-## Adopted so far
+Full suite: 183 passed.
 
-MOMENT only. `build_moment_model` disables the backbone's normalizer, and
-`forward` takes its module from `NORMALIZATION.module(condition)` and its loss
-through `transform_target_and_output`. The reported `normalized_mse` and
-`original_mse` are unchanged, just derived from `stats` rather than from the
-model's `revin_mean`/`revin_stdev` metadata, which is now the identity.
+## All four adapters are on it
 
-Chronos-2, Moirai-2.0, and TimesFM now have their `BackboneNormalization`
-subclass and a passing identity test, but their `forward` still calls the
-backbone's normalization directly. Rewiring them is the follow-up, one model
-per commit. The recipe is proven and the work is mechanical.
+Each `build_*_model` disables its backbone's normalization, each `forward`
+takes its module from `module(condition)` and its loss through
+`transform_target_and_output`, and the hand-rolled condition branch plus its
+condition check are gone from all four.
+
+Reported metrics are unchanged. They are derived from `stats` rather than from
+whatever the backbone exposed, which for MOMENT was `revin_mean`/`revin_stdev`
+metadata and for the others a returned `(loc, scale)` pair.
+
+Two things fell out of the adoption:
+
+- TimesFM's `_preprocess_whole_context` is deleted. It existed only because
+  `whole_context` needed a parallel copy of the vendored preprocessing to
+  substitute its own statistics. With normalization external, both modes run
+  through `model._preprocess_input` and differ only in the scheme. That path
+  survives because `_preprocess_input` rebuilds the padding mask from the
+  `pad_val` sentinel, which the scheme's `forward` re-stamps after scaling.
+- `moirai2.scaling: false` is now an error. It made the backbone use
+  `PackedNOPScaler`, so there was no normalization to hoist and both
+  conditions collapsed to the same loss. Both configs set it true. Failing
+  here beats silently introducing normalization the adapter never applied.
 
 `src/training/loss_space.py` also still calls `PatchTransformer.normalize` and
 `normalize_target` directly. `StandardScheme` is pinned equal to it, but that

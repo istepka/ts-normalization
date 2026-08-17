@@ -1,5 +1,3 @@
-import dataclasses
-
 import numpy as np
 import torch
 
@@ -45,9 +43,12 @@ def test_run_model_matches_manual_reshape_of_raw_model_output(tiny_corpus):
     batch = ma.make_batch(index, rows, cache, config)
     model = ma.build_moirai2_model(config, seed=0)
 
-    normalized_preds, normalized_target, loc, scale = ma.run_model(model, batch, config)
+    normalized_preds, normalized_target, stats = ma.run_model(model, batch, config)
+    # The backbone's scaler is disabled, so the raw call takes the sequence
+    # already normalized, which is what run_model feeds it.
+    z_sequence = stats.forward(batch.target.reshape(4, -1)).view_as(batch.target)
     raw_preds, raw_scaled_target = model(
-        batch.target,
+        z_sequence,
         batch.observed_mask,
         batch.sample_id,
         batch.time_id,
@@ -69,8 +70,8 @@ def test_run_model_matches_manual_reshape_of_raw_model_output(tiny_corpus):
 
     assert normalized_preds.shape == (4, 3, 32)
     assert normalized_target.shape == (4, 32)
-    assert loc.shape == (4,)
-    assert scale.shape == (4,)
+    assert stats.loc.shape == (4,)
+    assert stats.scale.shape == (4,)
     assert torch.equal(normalized_preds, manual)
     assert torch.equal(normalized_target, manual_target)
 
@@ -82,12 +83,10 @@ def test_original_predictions_are_inverse_of_normalized_predictions(tiny_corpus)
     batch = ma.make_batch(index, rows, cache, config)
     model = ma.build_moirai2_model(config, seed=0)
 
-    normalized_preds, _, loc, scale = ma.run_model(model, batch, config)
+    normalized_preds, _, stats = ma.run_model(model, batch, config)
     result = ma.forward(model, batch, "moirai2_original", config)
 
-    reconstructed_median = normalized_preds[:, 1] * scale.unsqueeze(-1) + (
-        loc.unsqueeze(-1)
-    )
+    reconstructed_median = stats.inverse(normalized_preds[:, 1])
     assert torch.allclose(
         reconstructed_median, result.original_point_forecast, atol=1e-5
     )
@@ -244,37 +243,56 @@ def test_disabled_backbone_reproduces_the_original_bit_identically(tiny_corpus):
     rows = index.split("train").sample(n=4, random_state=0)
     batch = ma.make_batch(index, rows, cache, config)
 
+    # build_moirai2_model disables the scaler, so the pre-refactor reference
+    # is reconstructed by putting the native PackedStdScaler back and driving
+    # the backbone's own normalizing path.
+    from src.models.vendor.moirai2.packed_scaler import PackedStdScaler
+
     reference = ma.build_moirai2_model(config, seed=0)
+    reference.scaler = PackedStdScaler()
     reference.eval()
+    batch_size = batch.target.shape[0]
+    context_mask = batch.observed_mask * ~batch.prediction_mask.unsqueeze(-1)
     with torch.no_grad():
-        preds_reference, target_reference, loc, scale = ma.run_model(
-            reference, batch, config
+        loc, scale = reference.scaler(
+            batch.target, context_mask, batch.sample_id, batch.variate_id
+        )
+        preds_reference, scaled_target_reference = reference(
+            batch.target,
+            batch.observed_mask,
+            batch.sample_id,
+            batch.time_id,
+            batch.variate_id,
+            batch.prediction_mask,
+            training_mode=True,
         )
 
     external = ma.build_moirai2_model(config, seed=0)
-    backbone = ma.Moirai2Normalization(minimum_scale=reference.scaler.minimum_scale)
-    backbone.disable(external)
     external.eval()
-
-    module = backbone.module("moirai2_normalized")
-    batch_size = batch.target.shape[0]
-    context_patches = config.context_token_length
-    context = batch.target[:, :context_patches].reshape(batch_size, -1)
-    context_valid = batch.observed_mask[:, :context_patches].reshape(batch_size, -1)
-    _, stats = module.transform_input(context, context_valid.float())
-
-    assert torch.equal(stats.loc, loc)
-    assert torch.equal(stats.scale, scale)
-
-    sequence = batch.target.reshape(batch_size, -1)
-    normalized_sequence = stats.forward(sequence).view_as(batch.target)
     with torch.no_grad():
-        preds_external, target_external, _, _ = ma.run_model(
-            external, dataclasses.replace(batch, target=normalized_sequence), config
-        )
+        preds_external, target_external, stats = ma.run_model(external, batch, config)
 
-    assert torch.equal(preds_reference, preds_external)
-    assert torch.equal(target_reference, target_external)
+    assert torch.equal(stats.loc, loc[:, 0, 0])
+    assert torch.equal(stats.scale, scale[:, 0, 0])
+
+    pred_position = config.context_token_length - 1
+    expected_preds = (
+        preds_reference[:, pred_position]
+        .view(
+            batch_size,
+            reference.num_predict_token,
+            reference.num_quantiles,
+            reference.patch_size,
+        )
+        .permute(0, 2, 1, 3)
+        .reshape(batch_size, reference.num_quantiles, config.predict_horizon)
+    )
+    expected_target = scaled_target_reference[:, config.context_token_length :].reshape(
+        batch_size, config.predict_horizon
+    )
+
+    assert torch.equal(expected_preds, preds_external)
+    assert torch.equal(expected_target, target_external)
 
 
 def test_disable_keeps_the_degenerate_floor():
@@ -294,3 +312,23 @@ def test_disable_keeps_the_degenerate_floor():
     )
     assert torch.equal(loc, torch.zeros_like(loc))
     assert torch.equal(scale, torch.ones_like(scale))
+
+
+def test_stats_target_matches_the_backbone_scaled_target(tiny_corpus):
+    """`forward` takes the SIT target from `stats`, not from `scaled_target`.
+
+    The backbone still returns its own normalized target, so the two must
+    agree or the normalized condition would silently score against a
+    different target than the one the model was trained on.
+    """
+    config = _tiny_config()
+    index, cache = _tiny_index(tiny_corpus)
+    rows = index.split("train").sample(n=4, random_state=0)
+    batch = ma.make_batch(index, rows, cache, config)
+    model = ma.build_moirai2_model(config, seed=0)
+
+    _, normalized_target, stats = ma.run_model(model, batch, config)
+    context_patches = config.context_token_length
+    future_target = batch.target[:, context_patches:].reshape(4, config.predict_horizon)
+
+    assert torch.equal(stats.forward(future_target), normalized_target)

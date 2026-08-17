@@ -50,9 +50,22 @@ class Chronos2Normalization(normalization.BackboneNormalization):
     normalized_condition = "chronos2_normalized"
     original_condition = "chronos2_original"
 
-    def __init__(self, config: "Chronos2Config"):
+    def __init__(self, use_arcsinh: bool, eps: float = 1e-5):
         super().__init__(
-            normalization.ArcsinhStdScheme(eps=1e-5, use_arcsinh=config.use_arcsinh)
+            normalization.ArcsinhStdScheme(eps=eps, use_arcsinh=use_arcsinh)
+        )
+
+    @classmethod
+    def from_model(cls, model: Chronos2Model) -> "Chronos2Normalization":
+        """Rebuilds the scheme from a model that may already be disabled.
+
+        `forward` receives a model but not the config. Both parameters survive
+        `disable`, since `IdentityInstanceNorm` keeps `eps` and `use_arcsinh`
+        is read off `chronos_config` rather than off the replaced module.
+        """
+        return cls(
+            use_arcsinh=model.chronos_config.use_arcsinh,
+            eps=model.instance_norm.eps,
         )
 
     def disable(self, model: Chronos2Model) -> None:
@@ -109,7 +122,11 @@ def build_chronos2_model(config: Chronos2Config, seed: int) -> Chronos2Model:
                 "time_encoding_scale": config.context_length,
             },
         )
-        return Chronos2Model(core_config)
+        model = Chronos2Model(core_config)
+        # `src/models/normalization.py` owns the transform now, so the
+        # backbone must not normalize a second time.
+        Chronos2Normalization(use_arcsinh=config.use_arcsinh).disable(model)
+        return model
     finally:
         torch.random.set_rng_state(generator_state)
 
@@ -189,10 +206,19 @@ def make_batch(
 
 def run_model(
     model: Chronos2Model, batch: Chronos2Batch
-) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+) -> tuple[torch.Tensor, torch.Tensor, normalization.TransformStats]:
+    """Forward pass exposing the output in both spaces.
+
+    The context is normalized here rather than inside `model.encode`, whose
+    own instance norm `build_chronos2_model` has disabled. The returned
+    statistics are what the caller reads the loss through.
+    """
+    backbone = Chronos2Normalization.from_model(model)
+    z_context, stats = backbone.transform_input(batch.context, batch.context_valid)
+
     num_output_patches = batch.target.shape[1] // model.chronos_config.output_patch_size
-    encoder_output, loc_scale, _, _ = model.encode(
-        context=batch.context,
+    encoder_output, _, _, _ = model.encode(
+        context=z_context,
         context_mask=batch.context_valid,
         num_output_patches=num_output_patches,
     )
@@ -208,10 +234,7 @@ def run_model(
     normalized = normalized.permute(0, 2, 1, 3).reshape(
         batch_size, model.num_quantiles, -1
     )
-    original = model.instance_norm.inverse(
-        normalized.reshape(batch_size, -1), loc_scale
-    ).reshape_as(normalized)
-    return normalized, original, loc_scale
+    return normalized, stats.inverse(normalized), stats
 
 
 @dataclass
@@ -228,19 +251,14 @@ def forward(
     batch: Chronos2Batch,
     condition: str,
 ) -> Chronos2ForwardResult:
-    if condition not in CONDITIONS:
-        raise ValueError(
-            f"unknown condition {condition!r}, must be one of {CONDITIONS}"
-        )
+    module = Chronos2Normalization.from_model(model).module(condition)
 
-    normalized, original, (loc, scale) = run_model(model, batch)
-    normalized_target, _ = model.instance_norm(batch.target, (loc, scale))
-    if condition == "chronos2_normalized":
-        predictions = normalized
-        target = normalized_target
-    else:
-        predictions = original
-        target = batch.target
+    normalized, original, stats = run_model(model, batch)
+    # The condition is the whole difference: SIT scores in normalized space,
+    # RevIN in original space, off the same forward pass.
+    predictions, target = module.transform_target_and_output(
+        normalized, batch.target, stats
+    )
     loss = quantile.crps_quantile_loss(
         predictions,
         target,
@@ -250,7 +268,7 @@ def forward(
 
     median_index = model.chronos_config.quantiles.index(0.5)
     original_point = original[:, median_index]
-    standardized_error = (original_point - batch.target) / scale
+    standardized_error = (original_point - batch.target) / stats.scale.unsqueeze(-1)
     normalized_mse = pointwise.masked_mse(
         standardized_error,
         torch.zeros_like(standardized_error),
@@ -271,8 +289,10 @@ def forward(
         torch.nan_to_num(batch.context), batch.context_valid, periods
     )
 
-    base_scale = scale.squeeze(-1) / batch.scale
-    degenerate = base_scale <= model.instance_norm.eps * (1.0 + 1e-6)
+    # Eligibility must not depend on the imposed scale, so the known b is
+    # divided out to recover the pre-intervention scale before the check.
+    base_scale = stats.scale / batch.scale
+    degenerate = base_scale <= stats.scheme.scale_floor * (1.0 + 1e-6)
     nan = torch.tensor(float("nan"), device=batch.context.device)
     return Chronos2ForwardResult(
         loss_per_example=loss,

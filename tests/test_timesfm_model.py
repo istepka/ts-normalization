@@ -1,4 +1,3 @@
-import dataclasses
 
 import numpy as np
 import pytest
@@ -6,7 +5,10 @@ import torch
 
 from src.data.gifteval import window_index as wi
 from src.models import timesfm as tm
-from src.models.vendor.timesfm_v1.pytorch_patched_decoder import TimesFMConfig
+from src.models.vendor.timesfm_v1.pytorch_patched_decoder import (
+    PatchedTimeSeriesDecoder,
+    TimesFMConfig,
+)
 
 
 def _tiny_config(patch_len=32, horizon_len=32):
@@ -70,7 +72,7 @@ def test_patching_matches_context_length_over_patch_len(tiny_corpus):
     batch = tm.make_batch(index, rows, cache, horizon_len=32)
     model = tm.build_timesfm_model(_tiny_config(), seed=0)
 
-    normalized_out, original_out, (mu, sigma) = tm.run_decoder(model, batch)
+    normalized_out, original_out, stats = tm.run_decoder(model, batch)
     n_patches = index.config.context_length // model.config.patch_len
     assert n_patches == 2
     # run_decoder already selects the last patch position for training; shape
@@ -78,8 +80,8 @@ def test_patching_matches_context_length_over_patch_len(tiny_corpus):
     num_outputs = len(model.config.quantiles) + 1
     assert normalized_out.shape == (4, 32, num_outputs)
     assert original_out.shape == (4, 32, num_outputs)
-    assert mu.shape == (4,)
-    assert sigma.shape == (4,)
+    assert stats.loc.shape == (4,)
+    assert stats.scale.shape == (4,)
 
 
 def test_causal_masking_last_patch_unaffected_by_earlier_content(tiny_corpus):
@@ -128,9 +130,8 @@ def test_inverse_transform_is_affine_correct(tiny_corpus):
     batch = tm.make_batch(index, rows, cache, horizon_len=32)
     model = tm.build_timesfm_model(_tiny_config(), seed=0)
 
-    normalized_out, original_out, (mu, sigma) = tm.run_decoder(model, batch)
-    reconstructed = normalized_out * sigma[:, None, None] + mu[:, None, None]
-    assert torch.allclose(reconstructed, original_out, atol=1e-4)
+    normalized_out, original_out, stats = tm.run_decoder(model, batch)
+    assert torch.allclose(stats.inverse(normalized_out), original_out, atol=1e-4)
 
 
 def test_mse_and_pinball_losses_are_separated(tiny_corpus):
@@ -452,8 +453,10 @@ def test_scheme_reproduces_the_vendored_first_patch_transform():
     valid[0, :40] = 0.0
     valid[3, 100:] = 0.0
 
-    model = tm.build_timesfm_model(tm.CONFIG_17M, seed=0)
-    _, _, (mu, sigma), _ = model._preprocess_input(
+    # build_timesfm_model rebinds _forward_transform to the identity, so the
+    # vendored statistic is read off a fresh, unmodified decoder.
+    reference = PatchedTimeSeriesDecoder(tm.CONFIG_17M)
+    _, _, (mu, sigma), _ = reference._preprocess_input(
         input_ts=context, input_padding=1.0 - valid
     )
 
@@ -464,31 +467,31 @@ def test_scheme_reproduces_the_vendored_first_patch_transform():
     assert torch.equal(scale, sigma)
 
 
-def test_scheme_reproduces_the_whole_context_preprocessing():
+def test_whole_context_mode_uses_the_entire_valid_context():
+    """`whole_context` is this repo's causal variant, not an upstream path.
+
+    There is no vendored reference to pin it against, so it is checked against
+    the statistic it is defined to be: the uncorrected mean and std over every
+    unpadded position, clamped at the config tolerance.
+    """
     torch.manual_seed(0)
     context = torch.randn(8, 128, dtype=torch.float32) * 100.0 + 5.0
     valid = torch.ones(8, 128, dtype=torch.float32)
     valid[0, :40] = 0.0
 
-    model = tm.build_timesfm_model(tm.CONFIG_17M, seed=0)
-    batch = tm.TimesFMBatch(
-        context=context,
-        context_padding=1.0 - valid,
-        target=torch.zeros(context.shape[0], tm.CONFIG_17M.horizon_len),
-        target_valid=torch.ones(context.shape[0], tm.CONFIG_17M.horizon_len),
-        freq=torch.zeros(context.shape[0], 1, dtype=torch.long),
-        dataset=np.array(["d"] * context.shape[0]),
-        domain=np.array(["x"] * context.shape[0]),
-        frequency=np.array(["H"] * context.shape[0]),
-        scale=torch.ones(context.shape[0]),
-    )
-    _, _, (mu, sigma) = tm._preprocess_whole_context(model, batch)
-
     scheme = tm.TimesFMNormalization(tm.CONFIG_17M, mode="whole_context").scheme
     loc, scale = scheme.statistics(context, valid)
 
-    assert torch.equal(loc, mu)
-    assert torch.equal(scale, sigma)
+    count = valid.sum(dim=1)
+    expected_loc = (context * valid).sum(dim=1) / count
+    centered = (context - expected_loc.unsqueeze(-1)) * valid
+    expected_scale = (centered.square().sum(dim=1) / count).sqrt()
+
+    assert torch.allclose(loc, expected_loc, atol=1e-4)
+    assert torch.allclose(scale, expected_scale, atol=1e-3)
+    # It differs from first_patch, which reads only one patch.
+    first_patch = tm.TimesFMNormalization(tm.CONFIG_17M, mode="first_patch").scheme
+    assert not torch.allclose(scale, first_patch.statistics(context, valid)[1])
 
 
 def test_disabled_backbone_reproduces_the_original_bit_identically(tiny_corpus):
@@ -498,28 +501,39 @@ def test_disabled_backbone_reproduces_the_original_bit_identically(tiny_corpus):
     rows = index.split("train").sample(n=4, random_state=0)
     batch = tm.make_batch(index, rows, cache, config.horizon_len)
 
+    # build_timesfm_model rebinds the transforms on the instance, so deleting
+    # those attributes uncovers the vendored class methods again and gives the
+    # pre-refactor path as a reference.
     reference = tm.build_timesfm_model(config, seed=0)
+    del reference._forward_transform
+    del reference._reverse_transform
     reference.eval()
+    num_outputs = len(config.quantiles) + 1
     with torch.no_grad():
-        normalized_reference, original_reference, _ = tm.run_decoder(reference, batch)
+        model_input, patched_padding, ref_stats, _ = reference._preprocess_input(
+            input_ts=batch.context, input_padding=batch.context_padding
+        )
+        model_input = model_input + reference.freq_emb(batch.freq)
+        model_output = reference.stacked_transformer(model_input, patched_padding)
+        output_ts = reference.horizon_ff_layer(model_output)
+        b, n, _ = output_ts.shape
+        normalized_all = output_ts.view(b, n, config.horizon_len, num_outputs)
+        normalized_reference = normalized_all[:, -1]
+        original_reference = reference._reverse_transform(normalized_all, ref_stats)[
+            :, -1
+        ]
 
     external = tm.build_timesfm_model(config, seed=0)
-    backbone = tm.TimesFMNormalization(config, mode="first_patch")
-    backbone.disable(external)
     external.eval()
-
-    module = backbone.module("timesfm_normalized")
-    z_context, stats = module.transform_input(
-        batch.context, 1.0 - batch.context_padding
-    )
+    # run_decoder normalizes internally now, so it takes the raw batch.
     with torch.no_grad():
-        normalized_external, _, _ = tm.run_decoder(
-            external, dataclasses.replace(batch, context=z_context)
-        )
+        normalized_external, original_external, stats = tm.run_decoder(external, batch)
 
+    assert torch.equal(stats.loc, ref_stats[0])
+    assert torch.equal(stats.scale, ref_stats[1])
     assert torch.equal(normalized_reference, normalized_external)
     # RevIN reads the same forward pass in the original space.
-    assert torch.equal(stats.inverse(normalized_external), original_reference)
+    assert torch.equal(original_external, original_reference)
 
 
 def test_scheme_rejects_an_unknown_mode():

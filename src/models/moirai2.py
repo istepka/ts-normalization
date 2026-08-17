@@ -47,6 +47,15 @@ class Moirai2Normalization(normalization.BackboneNormalization):
             normalization.FlooredStdScheme(correction=1, minimum_scale=minimum_scale)
         )
 
+    @classmethod
+    def from_model(cls, model: Moirai2Module) -> "Moirai2Normalization":
+        """Rebuilds the scheme from a model that may already be disabled.
+
+        `minimum_scale` survives `disable`, which carries it onto the
+        replacement scaler for exactly this reason.
+        """
+        return cls(minimum_scale=model.scaler.minimum_scale)
+
     def disable(self, model: Moirai2Module) -> None:
         from src.models.vendor.moirai2.packed_scaler import PackedNOPScaler
 
@@ -98,11 +107,20 @@ def build_moirai2_model(config: Moirai2Config, seed: int) -> Moirai2Module:
             f"num_patches ({config.num_patches}) exceeds max_seq_len "
             f"({config.max_seq_len})"
         )
+    if not config.scaling:
+        # Without scaling the backbone uses PackedNOPScaler, so there is no
+        # normalization to hoist and the two conditions collapse into the same
+        # loss. Fail here rather than silently introducing normalization the
+        # unadopted adapter never applied.
+        raise ValueError(
+            "moirai2.scaling must be true; the loss-space conditions are "
+            "indistinguishable without instance normalization"
+        )
 
     generator_state = torch.random.get_rng_state()
     try:
         torch.manual_seed(seed)
-        return Moirai2Module(
+        model = Moirai2Module(
             d_model=config.d_model,
             d_ff=config.d_ff,
             num_layers=config.num_layers,
@@ -114,6 +132,10 @@ def build_moirai2_model(config: Moirai2Config, seed: int) -> Moirai2Module:
             num_predict_token=config.num_predict_token,
             quantile_levels=config.quantile_levels,
         )
+        # `src/models/normalization.py` owns the transform now, so the
+        # backbone must not normalize a second time.
+        Moirai2Normalization.from_model(model).disable(model)
+        return model
     finally:
         torch.random.set_rng_state(generator_state)
 
@@ -207,19 +229,27 @@ def make_batch(
 
 def run_model(
     model: Moirai2Module, batch: Moirai2Batch, config: Moirai2Config
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, normalization.TransformStats]:
     """Runs the model and returns per-example quantities in patch order.
 
     normalized_preds: [B, num_quantiles, predict_horizon]
     normalized_target: [B, predict_horizon]
-    loc, scale: [B], the context statistics used to normalize this window
+    stats: the context statistics the window was normalized with
+
+    The sequence is normalized here rather than inside the backbone, whose
+    own scaler `build_moirai2_model` has disabled. Statistics come from the
+    observed context positions only, which is the mask upstream's
+    `PackedStdScaler` was given.
     """
+    batch_size = batch.target.shape[0]
     context_mask = batch.observed_mask * ~batch.prediction_mask.unsqueeze(-1)
-    loc, scale = model.scaler(
-        batch.target, context_mask, batch.sample_id, batch.variate_id
+    backbone = Moirai2Normalization.from_model(model)
+    z_sequence, stats = backbone.transform_input(
+        batch.target.reshape(batch_size, -1),
+        context_mask.reshape(batch_size, -1).float(),
     )
     preds, scaled_target = model(
-        batch.target,
+        z_sequence.view_as(batch.target),
         batch.observed_mask,
         batch.sample_id,
         batch.time_id,
@@ -228,7 +258,6 @@ def run_model(
         training_mode=True,
     )
 
-    batch_size = preds.shape[0]
     pred_position = config.context_token_length - 1
     raw_preds = preds[:, pred_position].view(
         batch_size, model.num_predict_token, model.num_quantiles, model.patch_size
@@ -239,7 +268,7 @@ def run_model(
     normalized_target = scaled_target[:, config.context_token_length :].reshape(
         batch_size, config.predict_horizon
     )
-    return normalized_preds, normalized_target, loc[:, 0, 0], scale[:, 0, 0]
+    return normalized_preds, normalized_target, stats
 
 
 @dataclass
@@ -257,12 +286,11 @@ def forward(
     condition: str,
     config: Moirai2Config,
 ) -> Moirai2ForwardResult:
-    if condition not in CONDITIONS:
-        raise ValueError(
-            f"unknown condition {condition!r}, must be one of {CONDITIONS}"
-        )
+    module = Moirai2Normalization.from_model(model).module(condition)
 
-    normalized_preds, normalized_target, loc, scale = run_model(model, batch, config)
+    # The normalized target now comes from `stats` rather than the backbone's
+    # own `scaled_target`; the two are pinned equal in the adapter tests.
+    normalized_preds, _, stats = run_model(model, batch, config)
     batch_size = normalized_preds.shape[0]
     context_patches = config.context_token_length
 
@@ -273,12 +301,11 @@ def forward(
         batch_size, config.predict_horizon
     )
 
-    if condition == "moirai2_normalized":
-        predictions = normalized_preds
-        target = normalized_target
-    else:
-        predictions = normalized_preds * scale.view(-1, 1, 1) + loc.view(-1, 1, 1)
-        target = future_target
+    # The condition is the whole difference: SIT scores in normalized space,
+    # RevIN in original space, off the same forward pass.
+    predictions, target = module.transform_target_and_output(
+        normalized_preds, future_target, stats
+    )
     # uni2ts PackedQuantileMAELoss: pinball averaged over quantile levels, no
     # CRPS factor of 2. Chronos-2's loss sums and doubles instead.
     loss = quantile.pinball_loss(
@@ -290,10 +317,8 @@ def forward(
     )
 
     median_index = model.quantile_levels.index(0.5)
-    original_point = normalized_preds[:, median_index] * scale.unsqueeze(-1) + (
-        loc.unsqueeze(-1)
-    )
-    standardized_error = (original_point - future_target) / scale.unsqueeze(-1)
+    original_point = stats.inverse(normalized_preds[:, median_index])
+    standardized_error = (original_point - future_target) / stats.scale.unsqueeze(-1)
     normalized_mse = pointwise.masked_mse(
         standardized_error,
         torch.zeros_like(standardized_error),
@@ -315,9 +340,8 @@ def forward(
     )
     naive_mae = forecast.seasonal_naive_mae(context_raw, context_valid, periods)
 
-    base_scale = scale / batch.scale
-    degenerate_floor = model.scaler.minimum_scale**0.5
-    degenerate = base_scale <= degenerate_floor * (1.0 + 1e-6)
+    base_scale = stats.scale / batch.scale
+    degenerate = base_scale <= stats.scheme.scale_floor * (1.0 + 1e-6)
     nan = torch.tensor(float("nan"), device=batch.target.device)
     return Moirai2ForwardResult(
         loss_per_example=loss,
@@ -423,8 +447,8 @@ class Moirai2Forecaster:
         ).to(self.device)
 
         with torch.no_grad():
-            normalized, _, loc, scale = run_model(self.model, batch, self.config)
-            original = normalized * scale[:, None, None] + loc[:, None, None]
+            normalized, _, stats = run_model(self.model, batch, self.config)
+            original = stats.inverse(normalized)
         # run_model puts the quantile axis in the middle, [B, Q, H].
         return original.permute(0, 2, 1).float().cpu().numpy()
 

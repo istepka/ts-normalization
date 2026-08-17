@@ -366,8 +366,30 @@ class BackboneNormalization(ABC):
     normalized_condition: str
     original_condition: str
 
-    def __init__(self, scheme: NormalizationScheme):
+    def __init__(self, scheme: NormalizationScheme, apply_causal_norm: bool = False):
         self.scheme = scheme
+        self.apply_causal_norm = apply_causal_norm
+        # `SIT` and `RevIN` inherit the same `transform_input`, so either one
+        # serves the input half. See `transform_input` below.
+        self._input = SIT(scheme, apply_causal_norm)
+
+    def transform_input(
+        self,
+        context: torch.Tensor,
+        valid: torch.Tensor | None = None,
+        extra_context: torch.Tensor | None = None,
+        extra_valid: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, TransformStats]:
+        """Normalizes the context, without picking a condition.
+
+        The condition changes only which space the loss is read in, never the
+        forward pass, so a caller that needs the normalized context and its
+        statistics does not have to choose one first. That is what makes the
+        two conditions comparable: they are the same forward pass.
+        """
+        return self._input.transform_input(
+            context, valid, extra_context, extra_valid
+        )
 
     @classmethod
     def conditions(cls) -> tuple[str, str]:
@@ -392,9 +414,9 @@ class BackboneNormalization(ABC):
     ) -> NormalizationModule:
         """Returns the `SIT` or `RevIN` this condition asks for."""
         if condition == self.normalized_condition:
-            return SIT(self.scheme, apply_causal_norm)
+            return SIT(self.scheme, self.apply_causal_norm or apply_causal_norm)
         if condition == self.original_condition:
-            return RevIN(self.scheme, apply_causal_norm)
+            return RevIN(self.scheme, self.apply_causal_norm or apply_causal_norm)
         raise ValueError(
             f"unknown condition {condition!r}, must be one of {self.conditions()}"
         )
