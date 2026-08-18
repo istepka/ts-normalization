@@ -58,6 +58,13 @@ export EVAL_BATCHES=${EVAL_BATCHES:-50}
 export EVAL_WINDOWS_PER_DATASET=${EVAL_WINDOWS_PER_DATASET:-64}
 export CONFIG_SIZE=${CONFIG_SIZE:-70m}
 # Passed straight through to run_pretraining.sbatch; see the comment there.
+# Slurm dependency for the training array, e.g. afterok:32807 to resume a run
+# that has not finished yet. The eval chain hangs off the array either way.
+DEPENDENCY=${DEPENDENCY:-}
+TRAIN_DEP_ARGS=()
+if [ -n "${DEPENDENCY}" ]; then
+  TRAIN_DEP_ARGS=(--dependency="${DEPENDENCY}")
+fi
 export RESUME_ROOT=${RESUME_ROOT:-}
 export RESUME_STEP=${RESUME_STEP:-}
 export CORPUS_ROOT=${CORPUS_ROOT:-}
@@ -110,6 +117,7 @@ if [ "${MODEL}" = "chronos2" ] || [ "${MODEL}" = "moirai2" ]; then
 
   ARRAY_JOB=$(sbatch --parsable --job-name="gifteval_${MODEL}" \
     --array="0-${last_task}%8" \
+    "${TRAIN_DEP_ARGS[@]}" \
     scripts/run_pretraining.sbatch)
 
   echo "array job ${ARRAY_JOB}"
