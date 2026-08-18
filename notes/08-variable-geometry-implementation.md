@@ -141,13 +141,10 @@ series is a few dozen points, and reserving `3H - 1` of them leaves under the
 abandoning the idea that a context should carry more information than the
 horizon it predicts.
 
-The honest reading of this table is that the train regions are a small
-addition on their own. The large change is note 06's other finding: the
-geometry change opens the 99 corpus datasets that no series of reached 640
-points. That is why the plan ordered these two changes and why the retrain
-cannot separate their effects. If the short-series suites improve, phase 1 is
-the more likely cause, and a run with the geometry change but without the
-train regions would be the way to tell them apart.
+65,115 windows is small against 41 million, and the plan expected the
+geometry change to be the larger of the two effects. It is not, for the
+reason the next section records. What carries this rerun is the sampling
+weight these 13 datasets get, not the windows they contribute.
 
 ## The rebuilt index, and a correction to note 06
 
