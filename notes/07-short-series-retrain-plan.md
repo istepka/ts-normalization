@@ -1,7 +1,11 @@
 # Variable-context pretraining with M-series train splits
 
-Status: plan, not started. Written 2026-08-17. Work begins once the Moirai
-2.0 natural-scale runs (job 32462) and their eval chain finish.
+Status: executed 2026-08-18. What was actually built, and how the open
+questions below were answered, is recorded in
+[08-variable-geometry-implementation.md](08-variable-geometry-implementation.md).
+Item 8 was resolved by not needing it: the emitted train regions carry a
+`trainsplit_` prefix and the canonical copies stay excluded, so the exclusion
+list never had to move.
 
 Depends on the motivation and measurements in
 [06-variable-context-windows.md](06-variable-context-windows.md).
