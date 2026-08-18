@@ -149,6 +149,45 @@ cannot separate their effects. If the short-series suites improve, phase 1 is
 the more likely cause, and a run with the geometry change but without the
 train regions would be the way to tell them apart.
 
+## The rebuilt index, and a correction to note 06
+
+Built 2026-08-18 as job 32794, 41 minutes over 157 dataset directories.
+
+| | fixed 512+128 | variable, down to 64+8 |
+|---|---|---|
+| windows | 40,952,582 | 41,260,459 |
+| datasets with windows | 53 | 73 |
+| sub-512 windows | 0 | 231,263 (0.56%) |
+
+**Note 06 was wrong about why the corpus was invisible.** It said 99 dataset
+directories contributed nothing "because no series in them is long enough."
+Of the 84 still contributing nothing at 64 plus 8, **78 are multivariate**,
+which `build_window_index` skips by design and which no geometry change was
+ever going to admit. Only six are univariate and genuinely too short:
+`cif_2016_6`, `rideshare_with_missing`, and the four yearly train-split
+suites. The corpus was never mostly short, it was mostly gridded (`era5_*`
+and `cmip6_*` alone are 75 of the 78).
+
+So the geometry change bought 20 datasets, not 99, and 0.75% more windows.
+Five are ordinary corpus datasets that were just under the old threshold
+(`cif_2016_12`, `covid_mobility`, `kaggle_web_traffic_weekly`, `nn5_weekly`,
+`traffic_weekly`, `uber_tlc_daily`, `vehicle_trips_with_missing`). Thirteen
+are the train regions.
+
+### Window share is not exposure share
+
+The train regions are 0.31% of the index and **17.8% of the sampling
+weight**, because `build_batch_schedule` draws a dataset first and
+`dataset_weights` is uniform. Thirteen of 73 datasets means roughly one
+training example in six comes from a held-out suite's train region.
+
+That is a deliberate consequence of the existing sampler, not an accident,
+and it is almost certainly the largest single effect in this rerun: it
+matters far more than the 0.75% more windows. It may well be too much. If
+the short-series suites improve sharply while GIFT-Eval regresses, this
+weight is the first thing to look at, and `dataset_weights` is where to
+change it without rebuilding anything.
+
 ## What these runs are not
 
 **They are not zero-shot on M1, M3, M4, Tourism, or Favorita.** Those suites

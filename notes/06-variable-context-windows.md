@@ -14,6 +14,13 @@ over **53 datasets**. The corpus root has **152**. So 99 dataset directories
 contribute nothing, not because they were excluded but because no series in
 them is long enough.
 
+> **Correction, 2026-08-18.** The last sentence is wrong, and the rebuilt
+> index proved it. Of the directories still contributing nothing at 64 plus 8,
+> **78 are multivariate**, which `build_window_index` skips by design and
+> which no window geometry was ever going to admit. Only six are univariate
+> and genuinely too short. The corpus was never mostly short, it was mostly
+> gridded. See notes/08 for what the geometry change actually bought.
+
 **The held-out benchmarks are mostly unreachable too.** Train-split lengths
 against the 640 points a window needs:
 
