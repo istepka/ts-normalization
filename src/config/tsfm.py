@@ -23,6 +23,8 @@ class WindowIndexConfig:
     min_valid_fraction: float = MISSING
     base_seed: int = MISSING
     max_windows_per_series: int | None = None
+    min_context_length: int | None = None
+    min_prediction_length: int | None = None
     cache_path: str | None = None
 
 

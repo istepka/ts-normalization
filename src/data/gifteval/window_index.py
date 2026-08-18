@@ -6,7 +6,10 @@ in identical order; only the model-specific masking/target construction and the
 loss space differ. See notes/05-timesfm-pretraining-loss-space-plan.md.
 
 Every window is `context_length + prediction_length` raw points sliced from one
-series. MOMENT's masked-reconstruction task operates over the `context_length`
+series, at most the configured maximum and, when a minimum geometry is set, as
+little as `min_context_length + min_prediction_length` for a series too short
+for the maximum. `window_values` pads a short window out to the maximum shape
+against the context boundary, so the adapters see one fixed shape throughout. MOMENT's masked-reconstruction task operates over the `context_length`
 portion (its `seq_len`); TimesFM uses `context_length` as decoder input and
 `prediction_length` as the forecast horizon. Both derive their own masking /
 augmentation randomness deterministically from the window's `mask_seed` /
@@ -84,6 +87,15 @@ class SeriesCache:
 
 @dataclass(frozen=True)
 class WindowIndexConfig:
+    """`context_length` and `prediction_length` are the maximum geometry.
+
+    When `min_context_length` and `min_prediction_length` are set, a series
+    too short for the maximum still contributes windows at a reduced
+    geometry and every row carries its own lengths. Left unset, only series
+    reaching the maximum contribute, which is the fixed-geometry behaviour
+    every index built before 2026-08-18 has.
+    """
+
     context_length: int = 512
     prediction_length: int = 128
     stride: int = 512
@@ -91,6 +103,53 @@ class WindowIndexConfig:
     min_valid_fraction: float = 0.9
     base_seed: int = 0
     max_windows_per_series: int | None = None
+    min_context_length: int | None = None
+    min_prediction_length: int | None = None
+
+    def __post_init__(self):
+        if (self.min_context_length is None) != (self.min_prediction_length is None):
+            raise ValueError(
+                "min_context_length and min_prediction_length must be set "
+                "together or not at all"
+            )
+        if self.min_context_length is None:
+            return
+        if self.min_context_length > self.context_length:
+            raise ValueError("min_context_length exceeds context_length")
+        if self.min_prediction_length > self.prediction_length:
+            raise ValueError("min_prediction_length exceeds prediction_length")
+
+
+def series_geometry(n: int, config: WindowIndexConfig) -> tuple[int, int] | None:
+    """Context and horizon for a series of `n` points, or None if too short.
+
+    The rule keeps the maximum geometry's context-to-horizon ratio, so a
+    series long enough for the full 512 plus 128 gets exactly that and every
+    series that already produced windows produces the same ones. Shorter
+    series shrink along that ratio until the context would fall below
+    `min_context_length`, at which point the context is pinned there and the
+    horizon takes what is left.
+    """
+    max_context = config.context_length
+    max_prediction = config.prediction_length
+    if config.min_context_length is None:
+        if n < max_context + max_prediction:
+            return None
+        return max_context, max_prediction
+
+    ratio = max_context // max_prediction
+    prediction = min(
+        max(n // (ratio + 1), config.min_prediction_length), max_prediction
+    )
+    context = min(max_context, n - prediction)
+    if context < config.min_context_length:
+        context = config.min_context_length
+        prediction = n - context
+    if context < config.min_context_length:
+        return None
+    if prediction < config.min_prediction_length:
+        return None
+    return context, prediction
 
 
 class WindowIndex:
@@ -124,10 +183,28 @@ class WindowIndex:
         return dict(self._dataset_scale_group)
 
     def window_values(self, row: pd.Series, cache: SeriesCache) -> np.ndarray:
+        """The window padded to the index's maximum geometry.
+
+        A window shorter than the maximum is placed so its context ends and
+        its horizon begins exactly at the maximum context boundary, with the
+        rest left NaN. Every adapter therefore keeps slicing at the same two
+        fixed offsets and reads the padding through the validity mask it
+        already applies to missing values, so nothing downstream has to know
+        that geometry varies at all.
+        """
         target = cache.target(row["dataset"], row["series_id"])
         start = int(row["window_start"])
-        end = start + self.config.context_length + self.config.prediction_length
-        return target[start:end]
+        context_length = int(row["context_length"])
+        prediction_length = int(row["prediction_length"])
+        max_context = self.config.context_length
+        max_prediction = self.config.prediction_length
+        window = target[start : start + context_length + prediction_length]
+        if context_length == max_context and prediction_length == max_prediction:
+            return window
+        padded = np.full(max_context + max_prediction, np.nan, dtype=window.dtype)
+        padded[max_context - context_length : max_context] = window[:context_length]
+        padded[max_context : max_context + prediction_length] = window[context_length:]
+        return padded
 
     def valid_mask(self, row: pd.Series, cache: SeriesCache) -> np.ndarray:
         return ~np.isnan(self.window_values(row, cache))
@@ -163,22 +240,22 @@ class WindowIndex:
         cls, path: Path, config: WindowIndexConfig, corpus_root: Path
     ) -> "WindowIndex":
         table = pd.read_parquet(path)
-        # window_values() slices raw series with self.config.context_length /
-        # prediction_length, not whatever length the cached rows were
-        # actually built with -- a stale cache built for a different config
-        # would otherwise silently produce misaligned windows instead of
-        # failing. context_length/prediction_length are the only WindowIndex-
-        # affecting fields read back at query time; the rest (stride, seeds,
-        # val fraction, ...) are already fully baked into the cached rows.
-        cached_context = table["context_length"].unique()
-        cached_prediction = table["prediction_length"].unique()
-        if list(cached_context) != [config.context_length] or list(
-            cached_prediction
-        ) != [config.prediction_length]:
+        # window_values() pads every window out to self.config's maximum
+        # geometry, so a cache whose own maximum differs would be padded
+        # against the wrong boundary and silently misalign rather than
+        # fail. The maxima are the only WindowIndex-affecting fields read
+        # back at query time; the rest (stride, seeds, val fraction, the
+        # minimum geometry) are already fully baked into the cached rows.
+        cached_context = int(table["context_length"].max())
+        cached_prediction = int(table["prediction_length"].max())
+        if (
+            cached_context != config.context_length
+            or cached_prediction != config.prediction_length
+        ):
             raise ValueError(
-                f"cached window index at {path} was built with "
-                f"context_length={list(cached_context)}, "
-                f"prediction_length={list(cached_prediction)}, but the requested config is "
+                f"cached window index at {path} has a maximum geometry of "
+                f"context_length={cached_context}, "
+                f"prediction_length={cached_prediction}, but the requested config is "
                 f"context_length={config.context_length}, prediction_length={config.prediction_length}. "
                 "Rebuild the cache at a different path or fix the requested config -- "
                 "loading a mismatched cache would silently misalign windows."
@@ -280,7 +357,6 @@ def build_window_index(
     allows. Dataset-level scale groups are derived when WindowIndex is created.
     """
     corpus_root = Path(corpus_root)
-    window_length = config.context_length + config.prediction_length
     rows: list[dict] = []
 
     for name in dataset_names:
@@ -303,8 +379,11 @@ def build_window_index(
                 frequency = str(freqs[i])
                 target = np.asarray(targets[i], dtype=np.float32)
                 n = target.shape[0]
-                if n < window_length:
+                geometry = series_geometry(n, config)
+                if geometry is None:
                     continue
+                context_length, prediction_length = geometry
+                window_length = context_length + prediction_length
 
                 split = _series_split(
                     config.base_seed, name, series_id, config.val_series_fraction
@@ -318,7 +397,7 @@ def build_window_index(
                     valid_fraction = float((~np.isnan(window)).mean())
                     if valid_fraction < config.min_valid_fraction:
                         continue
-                    context = window[: config.context_length]
+                    context = window[:context_length]
                     valid_context = context[~np.isnan(context)]
                     if valid_context.size == 0:
                         continue
@@ -334,8 +413,8 @@ def build_window_index(
                             "frequency": frequency,
                             "series_id": series_id,
                             "window_start": window_start,
-                            "context_length": config.context_length,
-                            "prediction_length": config.prediction_length,
+                            "context_length": context_length,
+                            "prediction_length": prediction_length,
                             "valid_fraction": valid_fraction,
                             "context_mean": context_mean,
                             "context_std": context_std,
@@ -356,6 +435,22 @@ def build_window_index(
         )
     table = pd.DataFrame.from_records(rows)
     return WindowIndex(table, config, corpus_root)
+
+
+def geometry_distribution(table: pd.DataFrame) -> pd.DataFrame:
+    """Window counts per realized (context, prediction) pair.
+
+    Recorded per run because the length mix is part of what a checkpoint
+    means once the geometry stops being fixed.
+    """
+    counts = (
+        table.groupby(["context_length", "prediction_length"])
+        .size()
+        .reset_index(name="n_windows")
+        .sort_values("n_windows", ascending=False)
+    )
+    counts["share"] = counts["n_windows"] / counts["n_windows"].sum()
+    return counts
 
 
 def build_and_save_window_index(
@@ -382,16 +477,27 @@ def build_and_save_window_index(
     print(f"building window index over {len(dataset_names)} datasets ...")
     if exclude:
         print(f"holding out {len(exclude)} dataset(s) from training: {exclude}")
-    print(
-        f"window_length = context_length + prediction_length = "
-        f"{config.context_length + config.prediction_length} raw points; "
-        "any series shorter than that contributes zero windows"
-    )
+    if config.min_context_length is None:
+        print(
+            f"window_length = context_length + prediction_length = "
+            f"{config.context_length + config.prediction_length} raw points; "
+            "any series shorter than that contributes zero windows"
+        )
+    else:
+        minimum = config.min_context_length + config.min_prediction_length
+        print(
+            f"variable geometry, up to {config.context_length}+"
+            f"{config.prediction_length} and down to {config.min_context_length}+"
+            f"{config.min_prediction_length}; any series shorter than {minimum} "
+            "raw points contributes zero windows"
+        )
     index = build_window_index(corpus_root, dataset_names, domain_map, config)
     index.save(output)
 
     n_train, n_val = len(index.split("train")), len(index.split("val"))
     print(f"n_windows={len(index)} n_train={n_train} n_val={n_val}")
+    print("realized geometry:")
+    print(geometry_distribution(index.table).to_string(index=False))
 
     covered = set(index.table["dataset"].unique())
     zero_window_datasets = sorted(set(dataset_names) - covered)

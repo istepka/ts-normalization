@@ -93,3 +93,40 @@ def tiny_corpus(tmp_path: Path) -> tuple[Path, dict]:
         "synth_mv": {"domain": "Energy", "confidence": "high"},
     }
     return root, domain_map
+
+
+@pytest.fixture
+def mixed_length_corpus(tmp_path: Path) -> tuple[Path, dict]:
+    """One dataset of five series at 200, 100, 60, 25, and 11 points.
+
+    `tiny_corpus` is uniform-length by design, so nothing there exercises a
+    variable window geometry. These lengths straddle the geometries the
+    window-index tests build at, giving both full-length and shrunken
+    windows in the same index.
+    """
+    root = tmp_path / "gifteval_mixed"
+    root.mkdir()
+    rng = np.random.default_rng(0)
+    lengths = (200, 100, 60, 25, 11)
+    targets = [
+        (100.0 + rng.normal(size=length).cumsum()).astype(np.float32).tolist()
+        for length in lengths
+    ]
+    ds = datasets.Dataset.from_dict(
+        {
+            "item_id": [f"mixed_{i}" for i in range(len(lengths))],
+            "start": [pd.Timestamp("2020-01-01")] * len(lengths),
+            "freq": ["D"] * len(lengths),
+            "target": targets,
+        },
+        features=datasets.Features(
+            {
+                "item_id": datasets.Value("string"),
+                "start": datasets.Value("timestamp[s]"),
+                "freq": datasets.Value("string"),
+                "target": datasets.Sequence(datasets.Value("float32")),
+            }
+        ),
+    )
+    ds.save_to_disk(str(root / "mixed"))
+    return root, {"mixed": {"domain": "Nature", "confidence": "high"}}

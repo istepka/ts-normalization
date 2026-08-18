@@ -39,6 +39,12 @@ window_index:
   min_valid_fraction: 0.9
   base_seed: 0
   max_windows_per_series: null
+  # Set together to admit series too short for the full geometry. A window
+  # needs 64 context points and 8 horizon points, and takes up to the maxima
+  # above wherever the series allows it. Left null the index is fixed-
+  # geometry, which is what every run before 2026-08-18 trained on.
+  min_context_length: null
+  min_prediction_length: null
   cache_path: null
 
 dataset_weights: null

@@ -172,3 +172,24 @@ datasets:
   wiki-rolling_nips: {domain: Web/CloudOps, confidence: high}
   wind_farms_with_missing: {domain: Energy, confidence: high}
   wind_power: {domain: Energy, confidence: high}
+
+  # Train regions of the held-out evaluation suites, emitted by
+  # src/scripts/build_train_regions.py. The canonical copies above stay
+  # in corpus.exclude; these hold only what precedes every scored point.
+  trainsplit_m1_monthly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m1_quarterly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m1_yearly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m3_monthly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m3_other: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m3_quarterly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m3_yearly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m4_daily: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m4_hourly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m4_monthly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m4_quarterly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m4_weekly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_m4_yearly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_tourism_monthly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_tourism_quarterly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_tourism_yearly: {domain: Econ/Fin, confidence: medium}
+  trainsplit_favorita_sales: {domain: Sales, confidence: medium}

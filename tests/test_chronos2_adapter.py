@@ -236,3 +236,44 @@ def test_identity_instance_norm_is_the_identity():
     assert torch.equal(loc, torch.zeros_like(loc))
     assert torch.equal(scale, torch.ones_like(scale))
     assert torch.equal(instance_norm.inverse(x, (loc, scale)), x)
+
+
+def test_mixed_geometry_batch_scores_each_window_independently(mixed_length_corpus):
+    """The whole justification for padding to the fixed maximum instead of to
+    the batch maximum: a window's loss must not depend on which other windows
+    happen to share its batch, or two conditions drawing the same schedule
+    would still see different per-example losses."""
+    root, domain_map = mixed_length_corpus
+    config = wi.WindowIndexConfig(
+        context_length=64,
+        prediction_length=32,
+        stride=96,
+        val_series_fraction=0.25,
+        base_seed=0,
+        min_context_length=16,
+        min_prediction_length=8,
+    )
+    index = wi.build_window_index(root, ["mixed"], domain_map, config)
+    cache = wi.SeriesCache(root)
+    rows = index.table
+    assert rows["context_length"].nunique() > 1
+
+    model_config = _tiny_config()
+    model = ca.build_chronos2_model(model_config, seed=0)
+    model.eval()
+
+    with torch.no_grad():
+        together = ca.forward(
+            model, ca.make_batch(index, rows, cache), "chronos2_normalized"
+        ).loss_per_example
+        alone = torch.stack(
+            [
+                ca.forward(
+                    model,
+                    ca.make_batch(index, rows.iloc[[i]], cache),
+                    "chronos2_normalized",
+                ).loss_per_example[0]
+                for i in range(len(rows))
+            ]
+        )
+    assert torch.allclose(together, alone, atol=1e-5)

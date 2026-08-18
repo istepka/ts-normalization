@@ -70,6 +70,8 @@ def resolve_window_index(
         min_valid_fraction=cfg.window_index.min_valid_fraction,
         base_seed=cfg.window_index.base_seed,
         max_windows_per_series=cfg.window_index.max_windows_per_series,
+        min_context_length=cfg.window_index.min_context_length,
+        min_prediction_length=cfg.window_index.min_prediction_length,
     )
     cache_path = cfg.window_index.cache_path
     if cache_path and Path(cache_path).is_file():
@@ -923,6 +925,10 @@ def main(cfg: DictConfig) -> None:
                 "n_val": len(index.split("val")),
                 "config": OmegaConf.to_container(cfg.window_index, resolve=True),
                 "windows_per_dataset": index.table["dataset"].value_counts().to_dict(),
+                # The length mix is part of what the checkpoint means once
+                # the geometry stops being fixed, so it is recorded rather
+                # than re-derived from the index later.
+                "geometry": wi.geometry_distribution(index.table).to_dict("records"),
                 "dataset_scale_groups": index.dataset_scale_groups(),
                 "zero_window_datasets": zero_window_datasets,
             },

@@ -87,7 +87,7 @@ def test_load_rejects_cache_built_for_a_different_config(tiny_corpus, tmp_path):
         stride=index.config.stride,
         base_seed=index.config.base_seed,
     )
-    with pytest.raises(ValueError, match="was built with"):
+    with pytest.raises(ValueError, match="maximum geometry of"):
         wi.WindowIndex.load(cache_path, mismatched, root)
 
     # loading with the matching config still works
@@ -137,3 +137,93 @@ def test_build_batch_schedule_rejects_unweighted_dataset(tiny_corpus):
         assert "synth_b" in str(e)
     else:
         raise AssertionError("expected ValueError for missing dataset weight")
+
+
+def _mixed_index(mixed_length_corpus, **overrides):
+    root, domain_map = mixed_length_corpus
+    config = wi.WindowIndexConfig(
+        context_length=32,
+        prediction_length=8,
+        stride=40,
+        val_series_fraction=0.25,
+        min_valid_fraction=0.9,
+        base_seed=0,
+        **overrides,
+    )
+    return wi.build_window_index(root, ["mixed"], domain_map, config)
+
+
+def test_geometry_rule_reproduces_the_fixed_geometry_for_long_series():
+    """The whole point of the ratio rule: series that already produced
+    windows must produce exactly the same ones, or the variable-geometry
+    index is not a superset of the fixed one."""
+    config = wi.WindowIndexConfig(
+        context_length=512,
+        prediction_length=128,
+        min_context_length=64,
+        min_prediction_length=8,
+    )
+    assert wi.series_geometry(640, config) == (512, 128)
+    assert wi.series_geometry(5000, config) == (512, 128)
+    assert wi.series_geometry(639, config) == (512, 127)
+
+
+def test_geometry_rule_shrinks_short_series_and_rejects_the_too_short():
+    config = wi.WindowIndexConfig(
+        context_length=512,
+        prediction_length=128,
+        min_context_length=64,
+        min_prediction_length=8,
+    )
+    assert wi.series_geometry(200, config) == (160, 40)
+    # 72 is the shortest admissible series: the ratio would leave a 58-point
+    # context, so the context pins to its minimum and the horizon takes 8.
+    assert wi.series_geometry(72, config) == (64, 8)
+    assert wi.series_geometry(71, config) is None
+
+
+def test_minimum_geometry_must_be_set_as_a_pair():
+    with pytest.raises(ValueError, match="together or not at all"):
+        wi.WindowIndexConfig(min_context_length=64)
+
+
+def test_variable_index_is_a_strict_superset_of_the_fixed_one(mixed_length_corpus):
+    fixed = _mixed_index(mixed_length_corpus)
+    variable = _mixed_index(
+        mixed_length_corpus, min_context_length=8, min_prediction_length=2
+    )
+    key = ["dataset", "series_id", "window_start", "context_length"]
+    fixed_keys = set(map(tuple, fixed.table[key].to_numpy().tolist()))
+    variable_keys = set(map(tuple, variable.table[key].to_numpy().tolist()))
+    assert fixed_keys <= variable_keys
+    assert len(variable.table) > len(fixed.table)
+
+
+def test_short_windows_are_padded_against_the_context_boundary(mixed_length_corpus):
+    """A short window must land so the adapters' two fixed slice offsets
+    still separate its context from its horizon, with padding read as
+    missing on either side."""
+    root, _ = mixed_length_corpus
+    index = _mixed_index(
+        mixed_length_corpus, min_context_length=8, min_prediction_length=2
+    )
+    cache = wi.SeriesCache(root)
+    max_context = index.config.context_length
+    short = index.table[index.table["context_length"] < max_context]
+    assert len(short) > 0
+    row = short.iloc[0]
+    values = index.window_values(row, cache)
+    mask = index.valid_mask(row, cache)
+    assert values.shape == (max_context + index.config.prediction_length,)
+
+    context_length = int(row["context_length"])
+    prediction_length = int(row["prediction_length"])
+    assert mask[max_context - context_length : max_context].all()
+    assert not mask[: max_context - context_length].any()
+    assert mask[max_context : max_context + prediction_length].all()
+    assert not mask[max_context + prediction_length :].any()
+
+    raw = cache.target(row["dataset"], row["series_id"])
+    start = int(row["window_start"])
+    expected = raw[start : start + context_length + prediction_length]
+    assert np.array_equal(values[mask], expected)
