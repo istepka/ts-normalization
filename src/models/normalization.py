@@ -387,9 +387,7 @@ class BackboneNormalization(ABC):
         statistics does not have to choose one first. That is what makes the
         two conditions comparable: they are the same forward pass.
         """
-        return self._input.transform_input(
-            context, valid, extra_context, extra_valid
-        )
+        return self._input.transform_input(context, valid, extra_context, extra_valid)
 
     @classmethod
     def conditions(cls) -> tuple[str, str]:

@@ -229,10 +229,15 @@ def render_report(
     return "\n".join(lines)
 
 
-# The two deliverables: the main paper reports one row per benchmark, the
-# appendix breaks the same comparison out by frequency.
+# The deliverables. The main paper reports one row per benchmark; the appendix
+# gets the same comparison by frequency, both pooled across benchmarks and
+# broken out within each. The pooled-by-frequency view weights subsets by
+# series count like the others, so M4's 100,000 series dominate any frequency
+# it appears in. Read it as a trend across frequencies, not as a per-benchmark
+# claim.
 GRAINS = {
     "main": (("suite",), "TSFM held-out evaluation by benchmark"),
+    "frequency": (("freq",), "TSFM held-out evaluation by frequency"),
     "by_frequency": (
         ("suite", "freq"),
         "TSFM held-out evaluation by benchmark and frequency",
