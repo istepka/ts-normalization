@@ -16,9 +16,11 @@ scale-contaminated, per overleaf/SKILL.md.
 """
 
 import argparse
+import re
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 from src.scripts import collect_tsfm_eval as collect
 
@@ -70,6 +72,28 @@ def load_model_runs(specs: list[str]) -> pd.DataFrame:
         frame["model"] = model
         frames.append(frame)
     return pd.concat(frames, ignore_index=True)
+
+
+def checkpoint_steps(specs: list[str]) -> int:
+    """The update count behind a set of eval directories.
+
+    Read from each eval's own hydra config rather than passed in, so a table
+    can never claim a step count the checkpoints it summarizes do not have.
+    Every run in one table must share it, which is what makes a single number
+    in the caption honest.
+    """
+    steps = set()
+    for spec in specs:
+        directory = Path(spec.partition("=")[2])
+        for config in sorted(directory.glob("*/.hydra/config.yaml")):
+            checkpoint = yaml.safe_load(config.read_text())["checkpoint"]
+            match = re.search(r"checkpoint_step(\d+)\.pt$", checkpoint)
+            if match is None:
+                raise ValueError(f"cannot read a step count from {checkpoint}")
+            steps.add(int(match.group(1)))
+    if len(steps) != 1:
+        raise ValueError(f"eval directories mix checkpoint steps {sorted(steps)}")
+    return steps.pop()
 
 
 def load_baselines(root: Path) -> pd.DataFrame:
@@ -241,6 +265,7 @@ def main() -> None:
     ):
         runs = fold_frequency(load_model_runs(specs))
         seeds = int(runs["seed"].nunique())
+        steps = checkpoint_steps(specs)
         if setting == "zero-shot":
             preamble = (
                 "Held-out evaluation of models pretrained on GiftEvalPretrain "
@@ -265,7 +290,8 @@ def main() -> None:
                 keys,
                 labels,
                 model_order,
-                f"{preamble} Means over {seeds} seeds. {space_note}",
+                f"{preamble} Both models are pretrained for {steps:,} updates at batch "
+                f"size 512. Means over {seeds} seeds. {space_note}",
                 f"tab:{name}-main",
             )
         )
@@ -281,12 +307,16 @@ def main() -> None:
                 keys,
                 labels,
                 model_order,
-                f"{preamble} Broken out by frequency. Means over {seeds} seeds. "
+                f"{preamble} Broken out by frequency. Both models are pretrained for "
+                f"{steps:,} updates at batch size 512. Means over {seeds} seeds. "
                 f"{space_note}",
                 f"tab:{name}-by-frequency",
             )
         )
-        print(f"wrote {name}_main.tex and {name}_by_frequency.tex")
+        print(
+            f"wrote {name}_main.tex and {name}_by_frequency.tex "
+            f"({steps} updates, {seeds} seeds)"
+        )
 
 
 if __name__ == "__main__":
