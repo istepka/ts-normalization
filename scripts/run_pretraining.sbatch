@@ -67,6 +67,12 @@ fi
 
 CONTEXT_LENGTH=${CONTEXT_LENGTH:-512}
 PREDICTION_LENGTH=${PREDICTION_LENGTH:-128}
+# Empty leaves conf/tsfm_base.yaml's defaults, which are the canonical corpus
+# and a fixed window geometry. Set all three together to train on the
+# variable-geometry index over the train-split root (notes/08).
+CORPUS_ROOT=${CORPUS_ROOT:-}
+MIN_CONTEXT_LENGTH=${MIN_CONTEXT_LENGTH:-}
+MIN_PREDICTION_LENGTH=${MIN_PREDICTION_LENGTH:-}
 RUN_DATE=${RUN_DATE:-$(date +%F)}
 # The window index is a shared cache, not a run artifact: every paired run must
 # read the same file, so it lives at a stable path rather than a dated one.
@@ -162,6 +168,19 @@ if [ "${MODEL}" = "timesfm" ]; then
   extra_args+=("timesfm.config_size=${CONFIG_SIZE}")
 else
   extra_args+=("seed=${SEED}" "train.schedule_seed=${SEED}")
+fi
+
+if [ -n "${CORPUS_ROOT}" ]; then
+  extra_args+=("corpus.root=${CORPUS_ROOT}")
+fi
+# Recorded in resolved_config.yaml even though the cached index already
+# carries the geometry, so a run directory says what it trained on without
+# anyone reopening the parquet.
+if [ -n "${MIN_CONTEXT_LENGTH}" ]; then
+  extra_args+=(
+    "window_index.min_context_length=${MIN_CONTEXT_LENGTH}"
+    "window_index.min_prediction_length=${MIN_PREDICTION_LENGTH}"
+  )
 fi
 
 echo "model=${MODEL} task ${SLURM_ARRAY_TASK_ID}: seed=${SEED} condition=${CONDITION} kind=${KIND} assignment=${ASSIGNMENT} -> ${run_dir}"

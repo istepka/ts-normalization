@@ -57,6 +57,10 @@ export EVAL_EVERY=${EVAL_EVERY:-250}
 export EVAL_BATCHES=${EVAL_BATCHES:-50}
 export EVAL_WINDOWS_PER_DATASET=${EVAL_WINDOWS_PER_DATASET:-64}
 export CONFIG_SIZE=${CONFIG_SIZE:-70m}
+# Passed straight through to run_pretraining.sbatch; see the comment there.
+export CORPUS_ROOT=${CORPUS_ROOT:-}
+export MIN_CONTEXT_LENGTH=${MIN_CONTEXT_LENGTH:-}
+export MIN_PREDICTION_LENGTH=${MIN_PREDICTION_LENGTH:-}
 # NATURAL_ONLY=1 keeps only the two natural_mixture runs per seed and drops the
 # four controlled_scale ones, so the array is a third of its usual size.
 export NATURAL_ONLY=${NATURAL_ONLY:-0}
