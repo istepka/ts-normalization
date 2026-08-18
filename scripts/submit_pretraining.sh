@@ -58,6 +58,8 @@ export EVAL_BATCHES=${EVAL_BATCHES:-50}
 export EVAL_WINDOWS_PER_DATASET=${EVAL_WINDOWS_PER_DATASET:-64}
 export CONFIG_SIZE=${CONFIG_SIZE:-70m}
 # Passed straight through to run_pretraining.sbatch; see the comment there.
+export RESUME_ROOT=${RESUME_ROOT:-}
+export RESUME_STEP=${RESUME_STEP:-}
 export CORPUS_ROOT=${CORPUS_ROOT:-}
 export MIN_CONTEXT_LENGTH=${MIN_CONTEXT_LENGTH:-}
 export MIN_PREDICTION_LENGTH=${MIN_PREDICTION_LENGTH:-}

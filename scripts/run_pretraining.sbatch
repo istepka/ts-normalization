@@ -70,6 +70,13 @@ PREDICTION_LENGTH=${PREDICTION_LENGTH:-128}
 # Empty leaves conf/tsfm_base.yaml's defaults, which are the canonical corpus
 # and a fixed window geometry. Set all three together to train on the
 # variable-geometry index over the train-split root (notes/08).
+# Set RESUME_ROOT to a finished submission's run root and RESUME_STEP to the
+# checkpoint step to continue from. Each task then picks the source run whose
+# seed and condition match its own, so one resubmission extends a whole array.
+# STEPS must exceed RESUME_STEP. The run lands in a new directory, which
+# src.training.tsfm requires.
+RESUME_ROOT=${RESUME_ROOT:-}
+RESUME_STEP=${RESUME_STEP:-}
 CORPUS_ROOT=${CORPUS_ROOT:-}
 MIN_CONTEXT_LENGTH=${MIN_CONTEXT_LENGTH:-}
 MIN_PREDICTION_LENGTH=${MIN_PREDICTION_LENGTH:-}
@@ -172,6 +179,16 @@ fi
 
 if [ -n "${CORPUS_ROOT}" ]; then
   extra_args+=("corpus.root=${CORPUS_ROOT}")
+fi
+
+if [ -n "${RESUME_ROOT}" ]; then
+  resume_from="${RESUME_ROOT}/$(basename "${run_dir}")/checkpoint_step${RESUME_STEP}.pt"
+  if [ ! -f "${resume_from}" ]; then
+    echo "ERROR: resume checkpoint not found at ${resume_from}" >&2
+    exit 1
+  fi
+  extra_args+=("train.resume_from=${resume_from}")
+  echo "resuming from ${resume_from}"
 fi
 # Recorded in resolved_config.yaml even though the cached index already
 # carries the geometry, so a run directory says what it trained on without
