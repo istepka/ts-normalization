@@ -1,0 +1,35 @@
+defaults:
+  - _self_
+
+model: nhits
+condition: sit
+normalization: standard
+frequency: M
+device: cuda
+seed: 0
+output_dir: /zfsauton/scratch/istepka/ts-normalization/outputs/supervised_early_stop/${model}/${frequency}/${condition}/${normalization}/seed${seed}
+
+hydra:
+  run:
+    dir: ${output_dir}
+
+data:
+  monash_root: /zfsauton/scratch/istepka/lts/data/monash_eval
+  m4_root: /zfsauton/scratch/istepka/lts/data/m4_official
+  suites: [m1, m3, m4, tourism]
+
+train:
+  max_steps: 20000
+  batch_size: 32
+  windows_batch_size: 512
+  learning_rate: 1.0e-3
+  val_check_steps: 250
+  early_stop_patience_steps: 8
+  num_lr_decays: 3
+  verbose: false
+
+wandb:
+  entity: ts-normalization
+  project: supervised_monash
+  mode: online
+  experiment: m_series_early_stop
