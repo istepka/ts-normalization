@@ -164,8 +164,8 @@ def plot_aggregate(campaign: dict, output_path: Path):
 
 def plot_by_dataset(campaigns: dict[str, dict], output_path: Path):
     modes = (
-        (NORMALIZED_MODE, "Normalized-space loss", "--"),
-        (MODE, "LR-adjusted original-space loss", "-"),
+        (NORMALIZED_MODE, "Scale-invariant loss", "--"),
+        (MODE, "LR-adjusted scale-contaminated loss", "-"),
     )
     available_modes = [mode for mode, _, _ in modes if mode in campaigns]
     if not available_modes:

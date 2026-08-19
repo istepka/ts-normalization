@@ -79,9 +79,11 @@ def save_figure(
     plt.close(fig)
 
 
-def style_step_axis(axis: plt.Axes, end_step: int = 30_000) -> None:
+def style_step_axis(
+    axis: plt.Axes, end_step: int = 30_000, tick_step: int = 10_000
+) -> None:
     """Apply the shared training-step axis styling used by convergence panels."""
-    ticks = np.arange(0, end_step + 1, 10_000)
+    ticks = np.arange(0, end_step + 1, tick_step)
     axis.set_xlim(0, end_step)
     axis.set_xticks(
         ticks, labels=[f"{step // 1_000}k" if step else "0" for step in ticks]
