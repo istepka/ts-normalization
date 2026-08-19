@@ -87,13 +87,7 @@ def build_model(
         val_check_steps=val_check_steps,
         early_stop_patience_steps=early_stop_patience_steps,
         num_lr_decays=num_lr_decays,
-        scaler_type=(
-            "identity"
-            if normalization_mode == "causal"
-            else "standard"
-            if condition == "sit"
-            else "revin"
-        ),
+        scaler_type="identity" if normalization_mode == "causal" else "standard",
         random_seed=seed,
         alias=name,
         accelerator="gpu" if device == "cuda" else "cpu",

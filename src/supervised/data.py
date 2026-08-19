@@ -149,6 +149,27 @@ def context_length(series: list[SupervisedSeries]) -> int:
     return max(2 * horizon, 2 * period)
 
 
+def eligible_frequency_series(
+    series: list[SupervisedSeries], frequency: str
+) -> tuple[list[SupervisedSeries], list[SupervisedSeries], int, int]:
+    """Selects one pooled frequency with shared model dimensions and eligibility."""
+    groups = frequency_groups(series)
+    if frequency not in groups:
+        raise ValueError(
+            f"frequency {frequency!r} is absent; available {tuple(groups)}"
+        )
+    source = groups[frequency]
+    horizon = model_horizon(source)
+    input_size = context_length(source)
+    eligible = eligible_series(source, horizon, input_size + horizon)
+    if not eligible:
+        raise ValueError(
+            f"frequency {frequency!r} has no series with a complete "
+            "supervised training window"
+        )
+    return source, eligible, horizon, input_size
+
+
 def _frame_rows(
     values_by_item: list[tuple[SupervisedSeries, np.ndarray]], freq: str
 ) -> list[dict]:

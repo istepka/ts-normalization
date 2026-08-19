@@ -16,6 +16,10 @@ as a headline comparison. The evaluator also scores every possible H-step
 rolling origin in the test region and keeps those rows separate by origin and
 official horizon.
 
+The pooled frequency horizon and context determine eligibility before results
+are separated by benchmark. Neural methods and statistical references use the
+same shared selection, so every benchmark row compares the same series.
+
 The experiment has two normalization modes crossed with the two loss-space
 conditions. The `standard` mode uses NeuralForecast scaling on each sampled
 window. The `causal` mode disables NeuralForecast scaling with
@@ -29,6 +33,10 @@ and RevIN transformation interfaces in a manual NeuralForecast training loop,
 then reports forecasts in original units. The comparison table therefore has
 rows for `standard` and `causal`, crossed with columns for `SIT` and `RevIN`
 for each of NHITS, NBEATS, and PatchTST.
+
+Both standard-mode loss conditions use NeuralForecast's standard scaler with
+no learnable affine scaling parameters. Only the space in which MAE is taken
+changes between them.
 
 Standard and causal runs use the same complete-context window population,
 series batch size, sampled-window batch size, Adam optimizer, learning-rate
@@ -63,3 +71,11 @@ uv run python -m src.plotting.scripts.generate_supervised_mseries_tables \
 
 The generator requires the complete 72-run grid and fails on missing,
 duplicate, non-finite, or non-positive metric values.
+
+The affine-free and shared-eligibility correction was rerun on 2026-08-19.
+Training jobs `33591` through `33608`, evaluation jobs `33660` through
+`33677`, and reference array `33609` completed successfully. The dated result
+snapshot is stored under
+`outputs/supervised_result_snapshots/2026-08-19_post_fairness_fix` on scratch.
+Both fitted references match the neural population across all 215 grouped
+evaluation rows. Each reference fitted all 934,503 forecast cases.

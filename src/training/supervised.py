@@ -13,11 +13,8 @@ from src.config.supervised import SupervisedConfig
 from src.data.seasonality import parse_offset
 from src.supervised.causal import train_causal
 from src.supervised.data import (
-    context_length,
-    eligible_series,
-    frequency_groups,
+    eligible_frequency_series,
     load_series,
-    model_horizon,
     split_series,
     training_frame,
 )
@@ -40,20 +37,9 @@ def main(cfg: DictConfig) -> None:
     root = Path(cfg.data.monash_root)
     m4_root = Path(cfg.data.m4_root) if "m4" in cfg.data.suites else None
     series = load_series(root, tuple(cfg.data.suites), m4_root)
-    groups = frequency_groups(series)
-    if cfg.frequency not in groups:
-        raise ValueError(
-            f"frequency {cfg.frequency!r} is absent; available {tuple(groups)}"
-        )
-    source_series = groups[cfg.frequency]
-    horizon = model_horizon(source_series)
-    input_size = context_length(source_series)
-    frequency_series = eligible_series(source_series, horizon, input_size + horizon)
-    if not frequency_series:
-        raise ValueError(
-            f"frequency {cfg.frequency!r} has no series with a complete "
-            "supervised training window"
-        )
+    source_series, frequency_series, horizon, input_size = eligible_frequency_series(
+        series, cfg.frequency
+    )
     eligible_ids = {item.unique_id for item in frequency_series}
     excluded_series = [
         item.unique_id for item in source_series if item.unique_id not in eligible_ids

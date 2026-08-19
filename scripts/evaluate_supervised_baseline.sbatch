@@ -11,8 +11,10 @@
 
 set -euo pipefail
 
-repo=/zfsauton/scratch/istepka/tmp/worktrees/m-series-supervised
+repo=${SLURM_SUBMIT_DIR:?submit from the repository root}
 output=/zfsauton/scratch/istepka/ts-normalization/outputs/supervised_baselines
+cd "${repo}"
+test -f src/training/evaluate_supervised_baseline.py
 task=${SLURM_ARRAY_TASK_ID}
 tasks=20
 cursor=0
@@ -27,7 +29,6 @@ for baseline in ets arima; do
         read -r suite frequency shards <<< "${specification}"
         for ((shard = 0; shard < shards; shard++)); do
             if ((cursor % tasks == task)); then
-                cd "${repo}"
                 uv run python -m src.training.evaluate_supervised_baseline \
                     --baseline "${baseline}" \
                     --suite "${suite}" \

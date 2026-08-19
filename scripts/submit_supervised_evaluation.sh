@@ -2,7 +2,9 @@
 
 set -euo pipefail
 
-worktree=/zfsauton/scratch/istepka/tmp/worktrees/m-series-supervised
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+worktree=$(dirname "${script_dir}")
+cd "${worktree}"
 output_root=${1:?usage: submit_supervised_evaluation.sh OUTPUT_ROOT}
 
 for model in nhits nbeats patchtst; do
@@ -24,7 +26,7 @@ for model in nhits nbeats patchtst; do
           --partition="$partition" \
           --gres="$gpu_request" \
           --job-name="eval_${model}_${frequency}_${condition}_${normalization}" \
-          "$worktree/scripts/evaluate_supervised.sbatch" \
+          scripts/evaluate_supervised.sbatch \
           --run-dir "$run_dir" \
           --device cuda
       done

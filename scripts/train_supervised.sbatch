@@ -8,5 +8,7 @@
 
 set -euo pipefail
 
-cd /zfsauton/scratch/istepka/tmp/worktrees/m-series-supervised
+repo=${SLURM_SUBMIT_DIR:?submit from the repository root}
+cd "${repo}"
+test -f src/training/supervised.py
 uv run python -m src.training.supervised "$@"

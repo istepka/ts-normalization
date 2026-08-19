@@ -2,7 +2,9 @@
 
 set -euo pipefail
 
-worktree=/zfsauton/scratch/istepka/tmp/worktrees/m-series-supervised
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+worktree=$(dirname "${script_dir}")
+cd "${worktree}"
 requested_partition=${1:-all}
 
 for model in nhits nbeats patchtst; do
@@ -27,7 +29,7 @@ for model in nhits nbeats patchtst; do
           --partition="$partition" \
           --gres="$gpu_request" \
           --job-name="sup_${model}_${frequency}_${condition}_${normalization}" \
-          "$worktree/scripts/train_supervised.sbatch" \
+          scripts/train_supervised.sbatch \
           model="${model}" \
           condition="${condition}" \
           normalization="${normalization}" \

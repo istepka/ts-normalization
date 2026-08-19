@@ -11,11 +11,8 @@ from src.eval import baselines, predict, score
 from src.eval.suites import EvalSeries
 from src.metrics import accuracy
 from src.supervised.data import (
-    context_length,
-    eligible_series,
-    frequency_groups,
+    eligible_frequency_series,
     load_series,
-    model_horizon,
     split_series,
 )
 
@@ -49,14 +46,12 @@ def main() -> None:
 
     series = load_series(
         args.monash_root,
-        (args.suite,),
-        args.m4_root if args.suite == "m4" else None,
+        ("m1", "m3", "m4", "tourism"),
+        args.m4_root,
     )
-    source = frequency_groups(series)[args.frequency]
-    horizon = model_horizon(source)
-    input_size = context_length(source)
-    eligible = eligible_series(source, horizon, input_size + horizon)
-    splits = split_series(eligible, horizon)[args.shard_index :: args.num_shards]
+    _, eligible, horizon, input_size = eligible_frequency_series(series, args.frequency)
+    suite_series = [item for item in eligible if item.suite == args.suite]
+    splits = split_series(suite_series, horizon)[args.shard_index :: args.num_shards]
     if not splits:
         raise ValueError("baseline shard contains no series")
 

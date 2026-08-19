@@ -11,11 +11,8 @@ from omegaconf import OmegaConf
 from src.models.normalization import PopulationStdScheme
 from src.supervised.causal import CausalForecaster
 from src.supervised.data import (
-    context_length,
-    eligible_series,
-    frequency_groups,
+    eligible_frequency_series,
     load_series,
-    model_horizon,
     split_series,
 )
 from src.supervised.evaluate import (
@@ -36,10 +33,9 @@ def main() -> None:
     root = Path(cfg.data.monash_root)
     m4_root = Path(cfg.data.m4_root) if "m4" in cfg.data.suites else None
     series = load_series(root, tuple(cfg.data.suites), m4_root)
-    source_series = frequency_groups(series)[cfg.frequency]
-    horizon = model_horizon(source_series)
-    input_size = context_length(source_series)
-    frequency_series = eligible_series(source_series, horizon, input_size + horizon)
+    _, frequency_series, horizon, input_size = eligible_frequency_series(
+        series, cfg.frequency
+    )
     splits = split_series(frequency_series, horizon)
 
     if cfg.normalization == "standard":

@@ -13,6 +13,7 @@ from src.supervised.causal import _prefix_statistics, causal_training_windows
 from src.supervised.data import (
     SupervisedSeries,
     context_length,
+    eligible_frequency_series,
     eligible_series,
     model_horizon,
     split_series,
@@ -62,6 +63,20 @@ def test_context_uses_common_horizon_and_seasonal_cycle():
 
     assert model_horizon(series) == 24
     assert context_length(series) == 48
+
+
+def test_benchmark_subsets_use_pooled_frequency_eligibility():
+    series = [
+        _series("tourism", horizon=4, period=4, length=25),
+        _series("m1", horizon=6, period=4, length=40),
+    ]
+
+    _, eligible, horizon, input_size = eligible_frequency_series(series, "M")
+
+    assert horizon == 6
+    assert input_size == 12
+    assert [item.suite for item in eligible] == ["m1"]
+    assert eligible_series([series[0]], 4, 12) == [series[0]]
 
 
 def test_supervised_config_has_bounded_early_stopping_budget():
@@ -139,6 +154,8 @@ def test_all_neuralforecast_models_build_both_supervised_conditions():
             assert model.h == 4
             assert model.input_size == 8
             assert not model.start_padding_enabled
+            assert model.scaler.scaler_type == "standard"
+            assert not any("revin" in name for name, _ in model.named_parameters())
 
 
 def test_rolling_origin_wql_aggregates_as_ratio_of_sums():
