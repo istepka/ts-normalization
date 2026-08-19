@@ -6,7 +6,7 @@ and scale-contaminated loss spaces, with the fitted classical references in
 their own block on the right.
 
 The paper's vocabulary is not the harness's. `collect_tsfm_eval` labels the
-two conditions SIT and RevIN; here they become scale-invariant and
+two conditions SIT and RevIN. Here they become scale-invariant and
 scale-contaminated, per overleaf/SKILL.md.
 
   uv run python -m src.scripts.render_paper_tables \
@@ -26,13 +26,12 @@ from src.scripts import collect_tsfm_eval as collect
 
 # Mean for MASE and WQL, median across subsets for nMSE. nMSE's per-series
 # denominator is the context variance and is unbounded, so one degenerate
-# subset dominates its mean; see `collect_tsfm_eval.collapse`.
+# subset dominates its mean. See `collect_tsfm_eval.collapse`.
 METRICS = (
     ("mase", "MASE", "mean"),
     ("wql", "WQL", "mean"),
-    ("nmse", "nMSE", "median"),
 )
-SPACES = (("SIT", "Inv."), ("RevIN", "Contam."))
+SPACES = (("SIT", r"\oursLag"), ("RevIN", r"\SCL"))
 BASELINES = (
     ("seasonal_naive", r"\SNaive"),
     ("ets", r"\ETS"),
@@ -47,9 +46,22 @@ SUITE_LABELS = {
     "gifteval": "GIFT-Eval",
 }
 SUITE_ORDER = ("m1", "m3", "m4", "tourism", "favorita", "gifteval")
-# Folded so the gluonts aliases do not split a frequency across two rows.
-FREQ_ALIAS = {"W-SUN": "W", "Q-DEC": "Q", "A-DEC": "Y", "A": "Y"}
-FREQ_ORDER = ("Y", "Q", "M", "W", "D", "H", "T", "S", "15T", "10T", "30T", "5T")
+FREQ_ORDER = ("Y", "Q", "M", "W", "D", "H", "T", "S")
+STAR = r"$^{*}$"
+
+
+def base_frequency(freq: str) -> str:
+    """The bare frequency behind a gluonts alias.
+
+    GIFT-Eval carries the multiplier and the anchor in the code, so weekly
+    data arrives as five distinct strings (`W-SUN` through `W-FRI`) and
+    minutely as three (`5T`, `10T`, `15T`). Left alone each becomes its own
+    row, which splits one frequency across five lines of the table and makes
+    the weekly result unreadable. Stripping the multiplier and the anchor
+    leaves the eight base codes the paper actually talks about.
+    """
+    bare = re.sub(r"^\d+", "", str(freq)).split("-")[0]
+    return "Y" if bare == "A" else bare
 
 
 def parse_args() -> argparse.Namespace:
@@ -107,7 +119,46 @@ def load_baselines(root: Path) -> pd.DataFrame:
 
 
 def fold_frequency(table: pd.DataFrame) -> pd.DataFrame:
-    return table.assign(freq=table["freq"].replace(FREQ_ALIAS))
+    return table.assign(freq=table["freq"].map(base_frequency))
+
+
+def collapsed_frequencies(table: pd.DataFrame) -> dict[tuple[str, str], list[str]]:
+    """Which (benchmark, base frequency) cells pool more than their own code.
+
+    Keyed so the star lands only where something was actually pooled. M4's
+    weekly data is already `W` and gets no star. GIFT-Eval's is five anchored
+    codes and does.
+    """
+    out: dict[tuple[str, str], list[str]] = {}
+    for (suite, freq), group in table.groupby(["suite", "freq"]):
+        del group
+        out.setdefault((suite, base_frequency(freq)), []).append(str(freq))
+    return {key: sorted(values) for key, values in out.items() if values != [key[1]]}
+
+
+def summarize_baselines(table: pd.DataFrame, grain: tuple[str, ...]) -> pd.DataFrame:
+    """Native-mode reference results at `grain`, one row per estimator.
+
+    Deliberately not routed through `compare_conditions`. That function reads
+    a loss space out of the condition name, and a baseline has no loss space:
+    every one of them would come back labelled RevIN because its name does
+    not end in "normalized". The numbers survive that only because there is
+    exactly one row per estimator to pick from, which is an accident rather
+    than a guarantee.
+    """
+    native = table[table["mode"] == "native"]
+    per_run = collapse_runs(native, grain)
+    keys = ["model", *grain]
+    aggregated = per_run.groupby(keys, as_index=False).mean(numeric_only=True)
+    counts = per_run.groupby(keys, as_index=False).size()
+    merged = aggregated.merge(counts, on=keys)
+    if (merged["size"] != 1).any():
+        raise ValueError("a reference estimator has more than one run per cell")
+    return merged.drop(columns="size")
+
+
+def collapse_runs(table: pd.DataFrame, grain: tuple[str, ...]) -> pd.DataFrame:
+    return collect.collapse(table, collect.ACCURACY_METRICS, grain)
 
 
 def summarize(table: pd.DataFrame, grain: tuple[str, ...]) -> pd.DataFrame:
@@ -122,30 +173,33 @@ def summarize(table: pd.DataFrame, grain: tuple[str, ...]) -> pd.DataFrame:
     return collect.compare_conditions(per_run, collect.ACCURACY_METRICS, grain)
 
 
-def cell(frame: pd.DataFrame, key: dict, column: str) -> str:
+def value(frame: pd.DataFrame, key: dict, column: str) -> float | None:
     mask = pd.Series(True, index=frame.index)
-    for name, value in key.items():
-        mask &= frame[name] == value
+    for name, item in key.items():
+        mask &= frame[name] == item
     rows = frame[mask]
     if rows.empty or pd.isna(rows.iloc[0][column]):
-        return "--"
-    return f"{rows.iloc[0][column]:.3f}"
+        return None
+    return float(rows.iloc[0][column])
 
 
-def best_model(values: list[str], n_model_cols: int) -> list[str]:
-    """Bolds the lowest of the model columns, every metric being lower-is-better.
+def fmt(number: float | None) -> str:
+    return "--" if number is None else f"{number:.3f}"
 
-    Only the model columns compete. The reference estimators are fitted on
-    the series they forecast, so bolding one of them as the row winner would
-    read as a like-for-like loss that the setup does not support.
+
+def delta(sit: float | None, revin: float | None) -> str:
+    """SIT against RevIN as a percentage, coloured by which one won.
+
+    Every metric here is lower-is-better, so a negative delta is a win for
+    the scale-invariant loss. The sign carries that on its own. The colour is
+    there so a reader can scan a column of forty rows without doing the
+    arithmetic.
     """
-    numeric = [(i, float(v)) for i, v in enumerate(values[:n_model_cols]) if v != "--"]
-    if not numeric:
-        return values
-    winner = min(numeric, key=lambda pair: pair[1])[0]
-    out = list(values)
-    out[winner] = rf"\textbf{{{out[winner]}}}"
-    return out
+    if sit is None or revin is None or revin == 0.0:
+        return "--"
+    change = 100.0 * (sit / revin - 1.0)
+    macro = "ourswin" if change < 0 else "oursloss"
+    return rf"\{macro}{{{change:+.1f}}}"
 
 
 def render(
@@ -157,64 +211,94 @@ def render(
     model_order: list[tuple[str, str]],
     caption: str,
     label: str,
+    size: str,
+    metrics: tuple = METRICS,
 ) -> str:
-    n_model_cols = 2 * len(model_order)
-    column_spec = "l" * len(grain) + "".join("cc" for _ in model_order) + "ccc"
+    """One table. Each architecture gets SIT, RevIN, and their delta.
+
+    The reference block sits behind a double rule because those estimators
+    are fitted on the series they forecast. The rule is the visual form of
+    the same caveat the caption states.
+    """
+    n_lead = len(grain)
+    per_model = len(SPACES) + 1
+    n_model_cols = per_model * len(model_order)
+    column_spec = (
+        "l" * n_lead
+        + "".join("c" * per_model for _ in model_order)
+        + "||"
+        + "c" * len(BASELINES)
+    )
 
     header_models = " & ".join(
-        rf"\multicolumn{{2}}{{c}}{{{tex}}}" for _, tex in model_order
+        rf"\multicolumn{{{per_model}}}{{c}}{{{tex}}}" for _, tex in model_order
     )
-    cmid_start = len(grain) + 1
     cmids = []
     for i in range(len(model_order)):
-        left = cmid_start + 2 * i
-        cmids.append(rf"\cmidrule(lr){{{left}-{left + 1}}}")
-    ref_left = cmid_start + n_model_cols
-    cmids.append(rf"\cmidrule(lr){{{ref_left}-{ref_left + 2}}}")
+        left = n_lead + 1 + per_model * i
+        cmids.append(rf"\cmidrule(lr){{{left}-{left + per_model - 1}}}")
+    ref_left = n_lead + 1 + n_model_cols
+    cmids.append(rf"\cmidrule(lr){{{ref_left}-{ref_left + len(BASELINES) - 1}}}")
 
-    sub = " & ".join(short for _ in model_order for _, short in SPACES)
+    sub = " & ".join(
+        part
+        for _ in model_order
+        for part in ([short for _, short in SPACES] + [r"$\Delta\%$"])
+    )
     refs = " & ".join(tex for _, tex in BASELINES)
 
     lines = [
+        "% Generated by src/scripts/render_paper_tables.py. Do not edit by hand.",
         r"\begin{table}[t!]",
         r"\centering",
         rf"\caption{{{caption}}}",
         rf"\label{{{label}}}",
         r"\renewcommand{\arraystretch}{1.15}",
-        r"\resizebox{\textwidth}{!}{",
+        rf"\{size}",
+        r"\setlength{\tabcolsep}{4pt}",
         rf"\begin{{tabular}}{{{column_spec}}}",
         r"\toprule",
-        " & ".join([""] * len(grain))
+        " & ".join([""] * n_lead)
         + f" & {header_models} & "
-        + r"\multicolumn{3}{c}{Reference} \\",
+        + rf"\multicolumn{{{len(BASELINES)}}}{{c}}{{Reference}} \\",
         "".join(cmids),
         " & ".join(r"\textbf{" + h + "}" for h in grain_headers(grain))
         + f" & {sub} & {refs} "
         + r"\\",
     ]
 
-    for metric, metric_label, statistic in METRICS:
+    total_cols = n_lead + n_model_cols + len(BASELINES)
+    for metric, metric_label, statistic in metrics:
         column = metric if statistic == "mean" else f"{metric}_median"
         lines.append(r"\midrule")
-        lines.append(
-            rf"\multicolumn{{{len(grain) + n_model_cols + 3}}}{{l}}"
-            rf"{{\emph{{{metric_label}}}}} \\"
-        )
+        # A single-metric table names its metric in the caption, so a banner
+        # row would only repeat it.
+        if len(metrics) > 1:
+            lines.append(
+                rf"\multicolumn{{{total_cols}}}{{l}}{{\emph{{{metric_label}}}}} \\"
+            )
         for key, labels in zip(row_keys, row_labels):
             selector = dict(zip(grain, key))
-            values = []
+            cells = []
             for model, _ in model_order:
-                for space, _ in SPACES:
-                    values.append(
-                        cell(
-                            models, {**selector, "model": model, "space": space}, column
-                        )
-                    )
+                pair = [
+                    value(models, {**selector, "model": model, "space": space}, column)
+                    for space, _ in SPACES
+                ]
+                shown = [fmt(number) for number in pair]
+                # Bolded within the architecture, so each model is read as its
+                # own SIT-against-RevIN comparison rather than against the
+                # other architecture.
+                present = [(i, x) for i, x in enumerate(pair) if x is not None]
+                if present:
+                    winner = min(present, key=lambda item: item[1])[0]
+                    shown[winner] = rf"\textbf{{{shown[winner]}}}"
+                cells.extend(shown + [delta(pair[0], pair[1])])
             for name, _ in BASELINES:
-                values.append(cell(baselines, {**selector, "model": name}, column))
-            lines.append(" & ".join(labels + best_model(values, n_model_cols)) + r" \\")
+                cells.append(fmt(value(baselines, {**selector, "model": name}, column)))
+            lines.append(" & ".join(labels + cells) + r" \\")
 
-    lines += [r"\bottomrule", r"\end{tabular}", "}", r"\end{table}", ""]
+    lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}", ""]
     return "\n".join(lines)
 
 
@@ -227,7 +311,9 @@ def suite_rows(frame: pd.DataFrame) -> tuple[list[tuple], list[list[str]]]:
     return [(s,) for s in present], [[SUITE_LABELS[s]] for s in present]
 
 
-def suite_frequency_rows(frame: pd.DataFrame) -> tuple[list[tuple], list[list[str]]]:
+def suite_frequency_rows(
+    frame: pd.DataFrame, collapsed: dict[tuple[str, str], list[str]]
+) -> tuple[list[tuple], list[list[str]]]:
     keys, labels = [], []
     for suite in SUITE_ORDER:
         sub = frame[frame["suite"] == suite]
@@ -239,31 +325,48 @@ def suite_frequency_rows(frame: pd.DataFrame) -> tuple[list[tuple], list[list[st
         )
         for i, freq in enumerate(freqs):
             keys.append((suite, freq))
-            labels.append([SUITE_LABELS[suite] if i == 0 else "", freq])
+            star = STAR if (suite, freq) in collapsed else ""
+            labels.append([SUITE_LABELS[suite] if i == 0 else "", f"{freq}{star}"])
     return keys, labels
+
+
+def collapse_note(collapsed: dict[tuple[str, str], list[str]]) -> str:
+    """Explain the star used for pooled GIFT-Eval frequency aliases."""
+    if not collapsed:
+        return ""
+    return (
+        "A star marks a base frequency that pools anchored or multiplied "
+        "GIFT-Eval aliases. "
+    )
 
 
 def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    baseline_runs = fold_frequency(load_baselines(args.baselines))
+    raw_baselines = load_baselines(args.baselines)
+    baseline_runs = fold_frequency(raw_baselines)
     model_order = [("chronos2", r"\Chronostwo"), ("moirai2", r"\Moiraitwo")]
 
     space_note = (
-        "Inv. is the scale-invariant loss and Contam. the scale-contaminated "
-        "one, the only difference between the two runs of a model. "
-        "MASE and WQL are subset-weighted means; nMSE is the median across "
-        "subsets, its per-series denominator being unbounded. "
-        "Lower is better throughout; the better loss space in each row is bold. "
-        "The reference estimators are fitted on the series they forecast, so "
-        "they are not zero-shot and are separated accordingly."
+        r"\oursLag uses scale-invariant loss and \SCL uses "
+        "scale-contaminated loss. These are the only differences between "
+        "the two runs of each architecture. "
+        r"$\Delta\%$ reports \oursLag relative to \SCL. "
+        r"\ourswin{Green} denotes an improvement and \oursloss{red} a regression. "
+        "The better loss is bold within each architecture. "
+        "References are fitted on the series they forecast and appear behind "
+        "the double rule."
     )
 
     for name, specs, setting in (
         ("tsfm_heldout_zeroshot", args.zero_shot, "zero-shot"),
         ("tsfm_heldout_indomain", args.in_domain, "in-domain"),
     ):
-        runs = fold_frequency(load_model_runs(specs))
+        raw_runs = load_model_runs(specs)
+        runs = fold_frequency(raw_runs)
+        collapsed = collapsed_frequencies(
+            pd.concat([raw_runs, raw_baselines], ignore_index=True)
+        )
         seeds = int(runs["seed"].nunique())
         steps = checkpoint_steps(specs)
         if setting == "zero-shot":
@@ -280,7 +383,7 @@ def main() -> None:
             )
 
         by_suite = summarize(runs, ("suite",))
-        base_suite = summarize(baseline_runs, ("suite",))
+        base_suite = summarize_baselines(baseline_runs, ("suite",))
         keys, labels = suite_rows(by_suite)
         (args.output_dir / f"{name}_main.tex").write_text(
             render(
@@ -293,28 +396,37 @@ def main() -> None:
                 f"{preamble} Both models are pretrained for {steps:,} updates at batch "
                 f"size 512. Means over {seeds} seeds. {space_note}",
                 f"tab:{name}-main",
+                "small",
             )
         )
 
         by_freq = summarize(runs, ("suite", "freq"))
-        base_freq = summarize(baseline_runs, ("suite", "freq"))
-        keys, labels = suite_frequency_rows(by_freq)
-        (args.output_dir / f"{name}_by_frequency.tex").write_text(
-            render(
-                by_freq,
-                base_freq,
-                ("suite", "freq"),
-                keys,
-                labels,
-                model_order,
-                f"{preamble} Broken out by frequency. Both models are pretrained for "
-                f"{steps:,} updates at batch size 512. Means over {seeds} seeds. "
-                f"{space_note}",
-                f"tab:{name}-by-frequency",
+        base_freq = summarize_baselines(baseline_runs, ("suite", "freq"))
+        keys, labels = suite_frequency_rows(by_freq, collapsed)
+        note = collapse_note(collapsed)
+        # One file per metric. Both metrics in one table is 64 body rows,
+        # which overruns a page even at scriptsize, and longtable is not in
+        # the draft's preamble.
+        for metric in METRICS:
+            setting_label = "Zero-shot" if setting == "zero-shot" else "In-domain"
+            (args.output_dir / f"{name}_by_frequency_{metric[0]}.tex").write_text(
+                render(
+                    by_freq,
+                    base_freq,
+                    ("suite", "freq"),
+                    keys,
+                    labels,
+                    model_order,
+                    f"{setting_label} {metric[1]} by benchmark and frequency "
+                    f"after {steps:,} updates, averaged over {seeds} seeds. {note}"
+                    f"{space_note}",
+                    f"tab:{name}-by-frequency-{metric[0]}",
+                    "scriptsize",
+                    (metric,),
+                )
             )
-        )
         print(
-            f"wrote {name}_main.tex and {name}_by_frequency.tex "
+            f"wrote {name}_main.tex and {name}_by_frequency_*.tex "
             f"({steps} updates, {seeds} seeds)"
         )
 
