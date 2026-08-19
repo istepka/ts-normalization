@@ -5,7 +5,10 @@ import pandas as pd
 import torch
 from omegaconf import OmegaConf
 
-from src.plotting.scripts.generate_supervised_mseries_tables import paired_effect
+from src.plotting.scripts.generate_supervised_mseries_tables import (
+    aggregate_metric,
+    paired_effect,
+)
 from src.supervised.causal import _prefix_statistics, causal_training_windows
 from src.supervised.data import (
     SupervisedSeries,
@@ -200,3 +203,12 @@ def test_supervised_table_effect_is_paired_across_frequencies():
 
     assert np.isclose(change, -50.0)
     assert wins == 6
+
+
+def test_supervised_table_mase_uses_valid_series_counts():
+    rows = [
+        {"model_mase": 1.0, "model_mase_n": 2},
+        {"model_mase": 4.0, "model_mase_n": 8},
+    ]
+
+    assert aggregate_metric(rows, "mase", "model") == 3.4
