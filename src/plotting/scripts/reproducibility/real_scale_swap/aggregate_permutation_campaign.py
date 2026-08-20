@@ -1,8 +1,4 @@
-"""Aggregate the 15-pair LR-adjusted scale-swap permutation campaign.
-
-Paper: apd_loss_space_scale_swap.tex "Balanced assignment" (the p=0.042
-paired t-test on dataset-level AUC) and Fig. loss-space-scale-swap-datasets.
-"""
+"""Aggregate the 15-pair LR-adjusted scale-swap permutation campaign."""
 
 import argparse
 import json
@@ -272,7 +268,7 @@ def plot_paired_auc(campaigns: dict[str, dict], output_path: Path):
                 error_kw={"linewidth": 1.0, "capsize": 2.0},
             )
         ax.set_ylim(0.0, top)
-        ax.set_ylabel("full-training nMSE AUC")
+        ax.set_ylabel("Time-averaged validation nMSE")
         ax.set_xticks(x, display_names, rotation=35, ha="right", fontsize=8)
         ax.tick_params(axis="x", length=0)
         ax.grid(axis="y", color="0.85", linewidth=0.7)
@@ -313,6 +309,8 @@ def build_summary(campaign: dict) -> dict:
     ]
     raw_p_values = np.array([test.pvalue for test in tests])
     adjusted_p_values = holm_adjust(raw_p_values)
+    mean_low = low_auc.mean()
+    mean_high = high_auc.mean()
     datasets = {}
     for dataset, name in enumerate(campaign["names"]):
         percent_reduction = 100.0 * differences[:, dataset] / low_auc[:, dataset]
@@ -329,16 +327,21 @@ def build_summary(campaign: dict) -> dict:
             "holm_adjusted_p": float(adjusted_p_values[dataset]),
         }
     return {
-        "outcome": "mean ordinary nMSE AUC over the complete trajectory",
-        "alternative": "AUC(b=1) - AUC(b=10) > 0",
+        "outcome": "time-averaged validation nMSE over the complete trajectory",
+        "alternative": (
+            "time-averaged validation nMSE at b=1 minus b=10 is greater than zero"
+        ),
         "num_complementary_pairs": NUM_PAIRS,
         "general_effect_paired_t": {
             "statistic": float(paired_t.statistic),
             "degrees_of_freedom": int(paired_t.df),
             "one_sided_p": float(paired_t.pvalue),
-            "mean_auc_b1": float(low_auc.mean()),
-            "mean_auc_b10": float(high_auc.mean()),
-            "mean_auc_difference": float(differences.mean()),
+            "mean_trajectory_error_b1": float(mean_low),
+            "mean_trajectory_error_b10": float(mean_high),
+            "mean_trajectory_error_difference": float(differences.mean()),
+            "percent_reduction_b10_relative_to_b1": float(
+                100.0 * (mean_low - mean_high) / mean_low
+            ),
         },
         "datasets": datasets,
     }
@@ -370,9 +373,9 @@ def main():
     plot_paired_auc(
         campaigns, args.output_dir / "scale_swap_permutation_paired_auc.png"
     )
-    summary = build_summary(campaigns[MODE])
-    (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    print(json.dumps(summary, indent=2))
+    summaries = {mode: build_summary(campaign) for mode, campaign in campaigns.items()}
+    (args.output_dir / "summary.json").write_text(json.dumps(summaries, indent=2))
+    print(json.dumps(summaries, indent=2))
 
 
 if __name__ == "__main__":
