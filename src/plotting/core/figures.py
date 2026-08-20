@@ -5,11 +5,27 @@ from pathlib import Path
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 from scipy.stats import t
 
 GLOBAL_STYLE = {"color": "0.35", "linestyle": "--", "linewidth": 1.6}
 
+# Times New Roman is not installed on the Linux boxes we render on, so the
+# stack falls through to the metric-compatible clones. STIXGeneral ships with
+# matplotlib, which makes it the reliable last resort for a Times-like serif.
+SERIF_STACK = [
+    "Times New Roman",
+    "Nimbus Roman",
+    "Liberation Serif",
+    "STIXGeneral",
+    "DejaVu Serif",
+]
+
 PAPER_RCPARAMS = {
+    # ICLR is typeset in Times, so figures use a serif face and matching math.
+    "font.family": "serif",
+    "font.serif": SERIF_STACK,
+    "mathtext.fontset": "stix",
     # Embed TrueType rather than Type 3 fonts. Type 3 is what matplotlib emits
     # by default and what most venues reject at submission.
     "pdf.fonttype": 42,
@@ -35,6 +51,7 @@ PAPER_RCPARAMS = {
 
 def apply_paper_style() -> None:
     """Install the paper defaults, most importantly TrueType font embedding."""
+    sns.set_style("whitegrid", {"font.family": "serif", "font.serif": SERIF_STACK})
     mpl.rcParams.update(PAPER_RCPARAMS)
 
 
