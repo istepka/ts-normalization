@@ -23,6 +23,7 @@ class WandbConfig:
 def validate_config(cfg: DictConfig, schema: type) -> DictConfig:
     """Validate a composed Hydra config against a structured schema."""
     from src.config.loss_space import ToyConfig
+    from src.config.supervised import SupervisedConfig
     from src.config.tsfm import TsfmConfig
 
     validated = OmegaConf.merge(OmegaConf.structured(schema), cfg)
@@ -68,6 +69,23 @@ def validate_config(cfg: DictConfig, schema: type) -> DictConfig:
         OmegaConf.to_container(
             validated[cfg.model], resolve=False, throw_on_missing=True
         )
+    elif schema is SupervisedConfig:
+        fields = (
+            "model",
+            "condition",
+            "normalization",
+            "frequency",
+            "device",
+            "seed",
+            "output_dir",
+        )
+        for field_name in fields:
+            if OmegaConf.is_missing(validated, field_name):
+                validated[field_name]
+        for field_name in ("data", "train", "wandb"):
+            OmegaConf.to_container(
+                validated[field_name], resolve=False, throw_on_missing=True
+            )
     else:
         raise TypeError(f"unsupported config schema {schema!r}")
     return cfg
